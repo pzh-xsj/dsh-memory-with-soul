@@ -252,6 +252,28 @@ check('内置设置页 / api.py 与 serve.py 共用实现', () => {
   return 'ok'
 })
 
+check('左侧栏入口 / 浏览器半边已声明', () => {
+  // 宿主按 exports['./client'] 找浏览器入口；少了这一条，左侧栏永远不会有
+  // 「记忆库」，而服务端一半照常工作——最难查的那种半死。
+  const pkg = JSON.parse(readFileSync(join(HERE, 'package.json'), 'utf8'))
+  const entry = pkg.exports?.['./client']
+  const file = typeof entry === 'string' ? entry : entry?.default
+  must(typeof file === 'string', "package.json 缺 exports['./client']")
+  const bundle = readFileSync(join(HERE, file), 'utf8')
+  must(/__ModuleLoader__\.load\(/.test(bundle), 'client 入口不是 __ModuleLoader__.load 形态')
+  must(
+    !/require\(['"](node:)?(fs|path|child_process|os)['"]\)/.test(bundle),
+    'client 入口 require 了宿主没有的 node 内置模块',
+  )
+  must(pkg.dsh?.client?.platform === 'web', 'package.json 缺 dsh.client.platform')
+  must(pkg.files?.includes('client.js'), 'files 里没有 client.js，打包会漏')
+  // 侧栏行与 main 面板靠同一个 id 连线：id 变了 key 没变，点进去就是空白。
+  must(/name:\s*'main'/.test(bundle) && /key:\s*PANEL_ID/.test(bundle), '没注册 main 面板，或 key 没跟 id 共用')
+  must(/name:\s*'sidebar\.panellist'/.test(bundle) && /id:\s*PANEL_ID/.test(bundle), '没注册 sidebar.panellist，或 id 没跟面板共用一个常量')
+  must(/settings\.section/.test(bundle), 'client 入口没注册 settings.section')
+  return file
+})
+
 // ---------------------------------------------------------------- 报表
 
 // 异步检查跑完再统计

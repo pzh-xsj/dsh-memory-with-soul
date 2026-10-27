@@ -18,7 +18,7 @@ async function check(name, fn) {
     const detail = await fn()
     results.push({ ok: true, name, detail })
   } catch (error) {
-    results.push({ ok: false, name, detail: String(error?.message ?? error) })
+    results.push({ ok: false, name, detail: String(error?.stack ?? error?.message ?? error) })
   }
 }
 
@@ -31,6 +31,7 @@ function fakeContext({ stdout = '', exitCode = 0 } = {}) {
   const handlers = new Map()
   const calls = []
   const warnings = []
+  const routes = []
 
   const ctx = {
     logger: {
@@ -40,6 +41,32 @@ function fakeContext({ stdout = '', exitCode = 0 } = {}) {
     on: (name, handler) => {
       if (!handlers.has(name)) handlers.set(name, [])
       handlers.get(name).push(handler)
+    },
+    /**
+     * 宿主在依赖就绪时回调一次。自检里就当依赖已就绪——真宿主没就绪时
+     * 不会回调，但那样代码路径根本没跑，测了也没意义。
+     */
+    inject: (_names, callback) => {
+      try {
+        callback(ctx)
+      } catch (error) {
+        warnings.push(`inject: ${String(error?.message ?? error)}`)
+      }
+    },
+    get: () => undefined,
+    /** Cordis 的 ctx.effect：立即跑一次，返回值当清理函数。 */
+    effect: (fn) => {
+      const dispose = fn()
+      return typeof dispose === 'function' ? dispose : () => {}
+    },
+    /** 内置设置页的路由表挂这里，方便断言注册了几条。 */
+    connection: {
+      fetch: {
+        register: (route) => {
+          routes.push(route)
+          return () => {}
+        },
+      },
     },
     subprocess: {
       spawn: (spec) => {
@@ -60,6 +87,7 @@ function fakeContext({ stdout = '', exitCode = 0 } = {}) {
     ctx,
     calls,
     warnings,
+    routes,
     async fire(name, ...args) {
       for (const handler of handlers.get(name) ?? []) await handler(...args)
     },
@@ -91,6 +119,17 @@ await check('agent/created → 注入一条 <memory-context>', async () => {
   must(call.argv.at(-3) === '--dry', `渲染器参数不对：${call.argv.join(' ')}`)
   must(call.env.MEMORY_HARNESS === 'dsh', 'HEAP_MEMORY_HARNESS 未设置'.replace('HEAP_', 'MEMORY_'))
   return call.argv.slice(0, 2).join(' ')
+})
+
+await check('设置页 → 往宿主注册路由', async () => {
+  const host = fakeContext()
+  apply(host.ctx, {})
+  must(host.routes.length >= 9, `注册了 ${host.routes.length} 条`)
+  const paths = host.routes.map((route) => route.path)
+  for (const need of ['/api/memory/ui', '/api/memory/style.css', '/api/memory/overview']) {
+    must(paths.includes(need), `缺路由 ${need}`)
+  }
+  return `${String(host.routes.length)} 条`
 })
 
 await check('tool/call(read) → track 带 --paths', async () => {

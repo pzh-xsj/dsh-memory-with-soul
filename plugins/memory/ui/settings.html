@@ -304,6 +304,14 @@ const API_BASE = (window.__MEMORY_API_BASE__ || "/api").replace(/\/+$/, "");
 const EMBEDDED = Boolean(window.__MEMORY_EMBEDDED__);
 const SERVER_HINT = EMBEDDED ? "由 DSH 插件的内置页面提供" : "跑 `python ui/serve.py`";
 
+/**
+ * 嵌进宿主设置分区时（`?embed=1`）收起顶栏：外壳已经有「记忆库」标题，
+ * 顶栏再来一遍是重复。只影响观感，不改任何数据路径。
+ */
+if (new URLSearchParams(location.search).has("embed")) {
+  document.body.classList.add("embed");
+}
+
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 

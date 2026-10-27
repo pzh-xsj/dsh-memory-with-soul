@@ -64,6 +64,15 @@ code {
   border-bottom: 1px solid var(--line);
 }
 
+/* 嵌进宿主设置分区（?embed=1）：外壳已有标题，顶栏收起，页签留在顶部。 */
+body.embed .topbar {
+  display: none;
+}
+
+body.embed main {
+  padding-top: 14px;
+}
+
 .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
 .brand h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: .02em; }
 .brand .muted,
