@@ -1,0 +1,439 @@
+/* 记忆库设置页 · 样式
+   只做这一页用，不引外部字体/图标：离线可用，双击打开也不会白屏。 */
+
+:root {
+  --bg: #12141a;
+  --panel: #181b22;
+  --panel-2: #1f232c;
+  --line: #262b35;
+  --line-soft: #1e222b;
+  --fg: #e6e8ee;
+  --muted: #8a92a2;
+  --accent: #7aa2f7;
+  --accent-dim: #2b3a57;
+  --ok: #4fbf8f;
+  --warn: #e0b05c;
+  --err: #e5707e;
+  --radius: 10px;
+  --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.55 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+body { padding-bottom: 40px; }
+
+.mono { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--muted); }
+code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* ---------------------------------------------------------------- 顶栏 */
+
+/* 顶栏 + 状态条 + 页签整体吸顶：拆成三块各自 sticky 要写死 52px 这种魔法值，
+   改了 padding 就会错位；卷起来时「未保存」也得看得见。 */
+.head {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--bg);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  background: rgba(18, 20, 26, .88);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.brand h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: .02em; }
+.brand .muted,
+#rootLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 52vw;
+}
+
+.conn { display: flex; align-items: center; gap: 10px; }
+
+/* ---------------------------------------------------------------- 状态条 */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 24px;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: var(--panel);
+  border-bottom: 1px solid var(--line-soft);
+}
+.statusbar .sep { color: var(--line); }
+.statusbar .save-hint { margin-left: auto; font-size: 11.5px; }
+.statusbar #sbDirty.dirty { color: var(--warn); }
+
+/* ---------------------------------------------------------------- 页签 */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.tabs button {
+  appearance: none;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13.5px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: color .15s, border-color .15s;
+}
+.tabs button:hover { color: var(--fg); }
+.tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
+
+/* ---------------------------------------------------------------- 布局 */
+
+main { padding: 20px 24px; max-width: 1180px; }
+main section { scroll-margin-top: 110px; }   /* 吸顶头挡住锚点：标题别贴到边 */
+
+.tab { display: none; }
+.tab.active { display: block; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  margin-bottom: 16px;
+}
+
+.card h2 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.card h3 {
+  margin: 14px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: .04em;
+}
+.card h2 .sub, .card h3 .sub { font-weight: 400; font-size: 12px; color: var(--muted); }
+
+.hint { margin: 4px 0 10px; font-size: 12.5px; color: var(--muted); }
+.empty { margin: 8px 0; font-size: 12.5px; color: var(--muted); }
+
+.split { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; }
+
+.row {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  margin: 10px 0;
+}
+.row label { font-size: 13px; color: var(--muted); }
+
+.actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.spacer { flex: 1; }
+
+.section-title { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.section-title h3 { margin: 0; color: var(--fg); font-size: 13px; }
+
+/* ---------------------------------------------------------------- 表单 */
+
+input[type=text],
+input[type=number],
+input[type=search],
+select,
+textarea {
+  width: 100%;
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+
+input[type=text]:focus,
+input[type=number]:focus,
+input[type=search]:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(122, 162, 247, .16);
+}
+
+input:disabled, select:disabled, textarea:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+input[type=checkbox] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+textarea {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  resize: vertical;
+  min-height: 84px;
+  tab-size: 2;
+}
+textarea.tall { min-height: 380px; }
+
+select { cursor: pointer; appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 16px, calc(100% - 11px) 16px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 30px;
+}
+
+/* ---------------------------------------------------------------- 按钮 */
+
+button {
+  appearance: none;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 14px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--fg);
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+button:hover:not(:disabled) { background: #262b35; border-color: #333a46; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+
+button.primary {
+  background: var(--accent-dim);
+  border-color: #3a4f74;
+  color: #d8e4ff;
+}
+button.primary:hover:not(:disabled) { background: #34456a; }
+
+button.ghost { background: transparent; }
+button.small { font-size: 12px; padding: 5px 10px; }
+
+/* ---------------------------------------------------------------- 标签 */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.badge.ok { color: var(--ok); border-color: rgba(79, 191, 143, .35); background: rgba(79, 191, 143, .10); }
+.badge.warn { color: var(--warn); border-color: rgba(224, 176, 92, .35); background: rgba(224, 176, 92, .10); }
+.badge.err { color: var(--err); border-color: rgba(229, 112, 126, .35); background: rgba(229, 112, 126, .10); }
+.badge.accent { color: var(--accent); border-color: rgba(122, 162, 247, .35); background: rgba(122, 162, 247, .10); }
+
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.chip {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+}
+.chip.active { color: var(--fg); border-color: var(--accent); background: var(--accent-dim); }
+
+/* ---------------------------------------------------------------- 注入预算 */
+
+.meter {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.meter > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #4f8ef7, #7aa2f7);
+  transition: width .35s ease;
+}
+.meter.over > i { background: linear-gradient(90deg, #b7452f, var(--err)); }
+.meter.over { border-color: rgba(229, 112, 126, .5); }
+
+/* ---------------------------------------------------------------- 表格 */
+
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+  font-size: 11.5px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: top;
+}
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: rgba(255, 255, 255, .018); }
+td.path, .path {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  word-break: break-all;
+}
+td.num { font-variant-numeric: tabular-nums; color: var(--muted); }
+
+/* ---------------------------------------------------------------- 键值 */
+
+dl.kv { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 6px 14px; margin: 10px 0 0; }
+dl.kv dt { color: var(--muted); font-size: 12.5px; }
+dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+
+ul.plain, ol.plain { margin: 6px 0; padding-left: 18px; }
+ul.plain li, ol.plain li { margin: 4px 0; font-size: 12.5px; }
+ol.plain { padding-left: 20px; }
+.date { color: var(--muted); font-family: var(--mono); font-size: 11.5px; margin-right: 8px; }
+
+/* ---------------------------------------------------------------- 文件树 */
+
+details.group { border-bottom: 1px solid var(--line-soft); }
+details.group:last-child { border-bottom: 0; }
+details.group > summary {
+  cursor: pointer;
+  padding: 8px 4px;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: .03em;
+  list-style: none;
+  user-select: none;
+}
+details.group > summary::-webkit-details-marker { display: none; }
+details.group > summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 14px;
+  transition: transform .15s;
+}
+details.group[open] > summary::before { transform: rotate(90deg); }
+details.group > .body { padding: 0 0 8px 14px; }
+
+.list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.list-item:hover { background: var(--panel-2); }
+.list-item.active { background: var(--accent-dim); color: #dbe6ff; }
+.list-item .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-item .meta { flex: 0 0 auto; white-space: nowrap; margin-left: auto; color: var(--muted); font-size: 11px; font-family: var(--mono); }
+
+/* ---------------------------------------------------------------- toast */
+
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translate(-50%, 16px);
+  background: #26303f;
+  border: 1px solid #35415a;
+  color: var(--fg);
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease, transform .2s ease;
+  z-index: 60;
+  max-width: 72vw;
+}
+#toast.show { opacity: 1; transform: translate(-50%, 0); }
+#toast.err { background: #3a2029; border-color: #6d3242; color: #ffd9df; }
+
+/* ---------------------------------------------------------------- 小屏 */
+
+@media (max-width: 900px) {
+  .split { grid-template-columns: minmax(0, 1fr); }
+  .row { grid-template-columns: minmax(0, 1fr); align-items: start; }
+  main { padding: 16px 14px; }
+  .topbar { padding: 12px 14px; }
+  .tabs { padding: 0 10px; top: 50px; }
+  .tabs button { padding: 10px 10px; font-size: 13px; }
+  .statusbar { padding: 7px 14px; flex-wrap: wrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
+
+/* --------------------------------------------------------- 冲突确认条 */
+
+/* 不用 confirm()：原生对话框阻塞整个页面，之前就在这里把标签页卡死过 */
+.conflict {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(224, 176, 92, .45);
+  border-radius: 8px;
+  background: rgba(224, 176, 92, .12);
+  color: var(--fg);
+  font-size: 13px;
+}
+.conflict span { flex: 1; min-width: 0; }
+.conflict .btn { flex: 0 0 auto; height: 30px; padding: 0 12px; font-size: 13px; }

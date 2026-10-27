@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Memory Inject">
+  <defs>
+    <linearGradient id="cover" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b4a6b"/>
+      <stop offset="1" stop-color="#1f2739"/>
+    </linearGradient>
+  </defs>
+  <!-- book cover -->
+  <rect x="10" y="8" width="44" height="48" rx="6" fill="url(#cover)"/>
+  <!-- spine -->
+  <rect x="10" y="8" width="7" height="48" rx="3" fill="#8fa4cc" opacity="0.55"/>
+  <!-- text lines on the page -->
+  <g fill="#e8eefb" opacity="0.9">
+    <rect x="23" y="19" width="24" height="3.5" rx="1.75"/>
+    <rect x="23" y="27" width="19" height="3.5" rx="1.75"/>
+    <rect x="23" y="35" width="22" height="3.5" rx="1.75"/>
+  </g>
+  <!-- downward arrow: injected into the session -->
+  <g fill="#5ad1a8">
+    <rect x="30.5" y="42" width="3" height="9" rx="1.5"/>
+    <path d="M32 58 L25.5 49.5 H38.5 Z"/>
+  </g>
+</svg>

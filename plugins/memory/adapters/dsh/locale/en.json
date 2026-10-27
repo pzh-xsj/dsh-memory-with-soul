@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Memory Inject",
+    "description": "Injects the ~/.memory context block (persona, preferences, project-book entry, recent log) into every new session's inbox through agent.inject()."
+  }
+}

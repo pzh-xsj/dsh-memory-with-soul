@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "记忆注入",
+    "description": "会话创建时把 ~/.memory 渲染出的人格、偏好、项目册入口和最近日志经 agent.inject() 注入收件箱。"
+  }
+}

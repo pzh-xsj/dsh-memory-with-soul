@@ -1,0 +1,1424 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>记忆库设置</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="head">
+<header class="topbar">
+  <div class="brand">
+    <h1>记忆库</h1>
+    <span id="rootLabel" class="muted mono">未连接</span>
+  </div>
+  <div class="conn">
+    <span id="modeBadge" class="badge">未连接</span>
+    <button id="pickBtn" class="ghost" title="用浏览器目录授权做自由文本编辑">连接本地目录…</button>
+  </div>
+</header>
+
+<div id="statusbar" class="statusbar" hidden>
+  <span id="sbInject"></span>
+  <span class="sep">·</span>
+  <span id="sbGit"></span>
+  <span class="sep">·</span>
+  <span id="sbDirty"></span>
+  <span class="save-hint">保存 <kbd>Ctrl</kbd>+<kbd>S</kbd></span>
+</div>
+
+<nav class="tabs">
+  <button data-tab="overview" class="active">概览</button>
+  <button data-tab="memory">记忆</button>
+  <button data-tab="persona">人格</button>
+  <button data-tab="checkup">体检</button>
+  <button data-tab="config">设置</button>
+</nav>
+</div>
+
+<main>
+
+<!-- ------------------------------------------------------------ 概览 -->
+<section id="tab-overview" class="tab active">
+  <div class="card" id="ovIntro">
+    <h2>连接 <span class="sub" id="ovMode"></span></h2>
+    <p class="hint" id="ovHint">正在探测服务端…</p>
+    <dl class="kv" id="ovKv"></dl>
+  </div>
+
+  <div class="card">
+    <h2>注入预算 <span class="sub">每次会话开始时加载多少记忆</span></h2>
+    <p class="hint">超预算时先砍日志，再砍低优先级文件；SOUL 永不截断。数字来自渲染器的真实输出，不是估算。</p>
+    <div class="row" style="margin-bottom:12px">
+      <label for="ovAgent">预演身份</label>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <select id="ovAgent" style="max-width:180px"></select>
+        <span class="hint" id="ovCwd" style="margin:0"></span>
+      </div>
+    </div>
+    <div class="meter" id="ovMeter"><i style="width:0"></i></div>
+    <p class="hint" id="ovInjectLine">—</p>
+    <div id="ovWarnings"></div>
+    <div class="actions" style="margin-top:10px">
+      <button class="small" id="ovReload">重新测一次</button>
+    </div>
+    <div id="ovInjectedFiles" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card">
+    <h2>项目册 <span class="sub" id="ovProjectsSub"></span></h2>
+    <div id="ovProjects"><p class="empty">—</p></div>
+  </div>
+
+  <div class="card">
+    <h2>焦点与待办 <span class="sub">focus 硬上限 5 条；inbox 的出口是项目、playbooks、日志、删除</span></h2>
+    <div class="split" style="grid-template-columns:1fr 1fr">
+      <div>
+        <h3>焦点 <span class="badge" id="ovFocusChars">—</span></h3>
+        <div id="ovFocus"></div>
+      </div>
+      <div>
+        <h3>待办</h3>
+        <div id="ovInbox"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Agent 与版本</h2>
+    <div id="ovAgents"></div>
+    <p class="hint" id="ovGit"></p>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ 记忆 -->
+<section id="tab-memory" class="tab">
+  <div class="card">
+    <h2>记忆文件 <span class="sub" id="memSub"></span></h2>
+    <p class="hint">自由文本编辑要走浏览器目录授权；没连目录时这里是只读预览。</p>
+    <div class="toolbar">
+      <input type="search" id="memSearch" placeholder="按路径过滤…">
+      <div class="chips" id="memChips">
+        <button class="chip active" data-f="all">全部</button>
+        <button class="chip" data-f="shared">shared</button>
+        <button class="chip" data-f="agents">agents</button>
+        <button class="chip" data-f="log">log</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="split">
+    <div class="card" style="margin:0">
+      <div id="memTree"><p class="empty">还没有加载</p></div>
+    </div>
+    <div class="card" id="memWrap" style="margin:0">
+      <div class="section-title">
+        <h3 id="memPath">没选文件</h3>
+        <div class="spacer"></div>
+        <span class="badge" id="memBadge"></span>
+      </div>
+      <textarea id="memText" class="tall" disabled placeholder="从左边选一个文件"></textarea>
+      <div class="actions">
+        <button class="primary" id="memSave" disabled>保存文件</button>
+        <button id="memRevert" disabled>放弃修改</button>
+        <div class="spacer"></div>
+        <span class="hint" id="memHint"></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ 人格 -->
+<section id="tab-persona" class="tab">
+  <div class="card">
+    <h2>人格 <span class="sub">SOUL.md，按小节编辑</span></h2>
+    <p class="hint">每段对应 SOUL.md 的一个 <code>##</code> 小节，保存时按原顺序拼回，小节之外的内容不动。</p>
+    <div class="row">
+      <label>Agent</label>
+      <select id="agentSelect"><option value="">（未加载）</option></select>
+    </div>
+    <div id="soulEditor" style="margin-top:10px"><p class="empty">—</p></div>
+    <div class="actions">
+      <button class="primary" id="soulSave" disabled>保存人格</button>
+      <button id="soulReload" disabled>重新加载</button>
+      <div class="spacer"></div>
+      <span class="hint" id="soulHint"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>项目册元信息 <span class="sub">status / kind / 定位 / 注意事项</span></h2>
+    <p class="hint">这几项是机器要读的字段，手改容易破格式，所以在这里改。写入前自动备份到 <code>.state/ui-backups</code>。</p>
+    <div class="row">
+      <label>项目册</label>
+      <select id="projectSelect"><option value="">（未加载）</option></select>
+    </div>
+    <div class="row">
+      <label>标题</label>
+      <input type="text" id="pmTitle" disabled>
+    </div>
+    <div class="row">
+      <label>status</label>
+      <select id="pmStatus" disabled></select>
+    </div>
+    <div class="row">
+      <label>kind</label>
+      <select id="pmKind" disabled></select>
+    </div>
+    <div class="row" style="grid-template-columns:220px 1fr;align-items:start">
+      <label>定位</label>
+      <div>
+        <textarea id="pmPosition" style="min-height:60px" disabled></textarea>
+        <p class="hint"><span id="pmPosCount">0</span> / 40 字（checkup 在 40 字处提示，写入上限 120）</p>
+      </div>
+    </div>
+    <div class="row" style="grid-template-columns:220px 1fr;align-items:start">
+      <label>注意事项 · 禁区</label>
+      <textarea id="pmForbidden" style="min-height:80px" disabled></textarea>
+    </div>
+    <div class="row" style="grid-template-columns:220px 1fr;align-items:start">
+      <label>注意事项 · 前置动作</label>
+      <textarea id="pmPre" style="min-height:80px" disabled></textarea>
+    </div>
+    <div class="row" style="grid-template-columns:220px 1fr;align-items:start">
+      <label>注意事项 · 读取提示</label>
+      <textarea id="pmHints" style="min-height:80px" disabled></textarea>
+    </div>
+    <div class="actions">
+      <button class="primary" id="pmSave" disabled>保存元信息</button>
+      <button id="pmReload" disabled>重新加载</button>
+      <div class="spacer"></div>
+      <span class="hint" id="pmHint"></span>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ 体检 -->
+<section id="tab-checkup" class="tab">
+  <div class="card">
+    <h2>体检 <span class="sub">和 <code>python core/memory.py checkup</code> 同一份判断</span></h2>
+    <p class="hint">这里只读服务端算出来的结果，不在前端重写规则——上一版就是抄了一份，架构一变就全错。</p>
+    <div class="actions" style="margin-top:0">
+      <button class="primary" id="ckRun">重新体检</button>
+      <label class="hint" style="display:flex;gap:6px;align-items:center">
+        <input type="checkbox" id="ckAll"> 扫所有登记的项目册
+      </label>
+      <div class="spacer"></div>
+      <button id="ckExport" disabled>导出 JSON</button>
+    </div>
+    <p class="hint" id="ckSummary">—</p>
+    <div id="ckBody"></div>
+  </div>
+
+  <div class="card" id="ckStaleCard" style="display:none">
+    <h2>归档候选 <span class="sub">不是错，是信号</span></h2>
+    <div id="ckStale"></div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ 设置 -->
+<section id="tab-config" class="tab">
+  <div class="card">
+    <h2>注入</h2>
+    <p class="hint">总预算。改小会先挤掉日志，再挤掉低优先级文件。</p>
+    <div class="row">
+      <label>总预算（字符）</label>
+      <input type="number" id="cfg-maxChars" min="1000" step="500">
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>沉淀提醒</h2>
+    <p class="hint">四个条件同时满足才提醒：够久没写、够轮次、过了冷却、本次会话没超次数。</p>
+    <div class="row">
+      <label>启用提醒</label>
+      <input type="checkbox" id="cfg-digestEnabled">
+    </div>
+    <div class="row">
+      <label>多久没写就提醒（分钟）</label>
+      <input type="number" id="cfg-afterMinutes" min="30" step="30">
+    </div>
+    <div class="row">
+      <label>会话至少几轮</label>
+      <input type="number" id="cfg-minTurns" min="1" step="1">
+    </div>
+    <div class="row">
+      <label>两次提醒最小间隔（分钟）</label>
+      <input type="number" id="cfg-cooldownMinutes" min="30" step="30">
+    </div>
+    <div class="row">
+      <label>每会话最多提醒</label>
+      <input type="number" id="cfg-maxPerSession" min="1" step="1">
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>归档</h2>
+    <p class="hint">超过这个天数没被读过，会出现在体检的「归档候选」里。只报告，不自动归档。</p>
+    <div class="row">
+      <label>多少天未读算陈旧</label>
+      <input type="number" id="cfg-staleDays" min="30" step="30">
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>跨设备同步 <span class="sub">预留，未实现</span></h2>
+    <div class="row">
+      <label>启用同步</label>
+      <input type="checkbox" id="cfg-syncEnabled">
+    </div>
+    <div class="row">
+      <label>远程地址</label>
+      <input type="text" id="cfg-syncRemote" placeholder="git@github.com:...">
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>注入顺序 <span class="sub">只读</span></h2>
+    <p class="hint">这是 <code>config.json</code> 里 <code>inject.order</code> 的实际内容，按优先级排。改顺序要手改 JSON——顺序错了注入内容会整个错位，不适合在网页上点。</p>
+    <div id="cfgOrder"><p class="empty">—</p></div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" id="cfgSave" disabled>保存设置</button>
+    <button id="cfgReload">重新加载</button>
+    <div class="spacer"></div>
+    <span class="hint" id="cfgHint"></span>
+  </div>
+</section>
+
+</main>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+/* ================================================================ 基础工具 */
+
+const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === "class") el.className = v;
+      else if (k === "text") el.textContent = v;
+      else if (k === "html") el.innerHTML = v;
+      else if (k.startsWith("on") && typeof v === "function") el.addEventListener(k.slice(2).toLowerCase(), v);
+      else el.setAttribute(k, v === true ? "" : v);
+    }
+  }
+  for (const kid of kids.flat()) {
+    if (kid == null || kid === false) continue;
+    el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+
+function toast(msg, isErr) {
+  const el = $("#toast");
+  el.textContent = msg;
+  el.classList.toggle("err", !!isErr);
+  el.classList.add("show");
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove("show"), isErr ? 4200 : 2400);
+}
+
+const num = (n) => (typeof n === "number" ? n.toLocaleString("zh-CN") : n);
+
+/* ================================================================ 状态 */
+
+const S = {
+  server: false,
+  root: "",
+  overview: null,
+  config: null,
+  defaults: null,
+  handle: null,
+  tree: [],
+  filter: "all",
+  query: "",
+  file: null,            // { path, text, mtime }
+  agent: "",
+  ovAgent: "",           // 概览页预演用的身份，和人格页的选择互不影响
+  cwd: new URLSearchParams(location.search).get("cwd") || "",   // 预演目录，来自 ?cwd=
+  soul: null,            // { head, sections: [{title, body}], raw, mtime }
+  project: "",
+  meta: null,
+  checkup: null,
+  dirty: new Map(),      // panel -> true
+  loaded: new Set(),
+};
+
+const PANEL_NAMES = {
+  memory: "记忆文件",
+  soul: "人格",
+  meta: "项目册元信息",
+  config: "设置",
+};
+
+function markDirty(panel, on) {
+  if (on) S.dirty.set(panel, true);
+  else S.dirty.delete(panel);
+  const n = S.dirty.size;
+  const names = [...S.dirty.keys()].map((k) => PANEL_NAMES[k] || k);
+  const el = $("#sbDirty");
+  el.textContent = n ? `未保存：${names.join("、")}` : "全部已保存";
+  el.classList.toggle("dirty", n > 0);
+}
+
+function setMode(text, cls) {
+  const badge = $("#modeBadge");
+  badge.textContent = text;
+  badge.className = "badge " + (cls || "");
+}
+
+function setStatusbar() {
+  const bar = $("#statusbar");
+  const inj = S.overview && S.overview.injected;
+  if (!S.root) { bar.hidden = true; return; }
+  bar.hidden = false;
+
+  const injectEl = $("#sbInject");
+  if (inj && !inj.error) {
+    const over = inj.chars > inj.maxChars;
+    injectEl.textContent = `注入 ${num(inj.chars)} / ${num(inj.maxChars)}`;
+    injectEl.style.color = over ? "var(--err)" : "";
+  } else {
+    injectEl.textContent = "注入：（服务端不可用）";
+  }
+
+  const gitEl = $("#sbGit");
+  if (S.overview && S.overview.git) {
+    const d = S.overview.git.dirty || 0;
+    gitEl.textContent = d ? `git ${d} 个未提交` : "git 干净";
+  } else {
+    gitEl.textContent = "git：—";
+  }
+  markDirty();
+}
+
+/* ================================================================ HTTP */
+
+async function api(path, opts) {
+  opts = opts || {};
+  const res = await fetch(path, {
+    method: opts.method || "GET",
+    headers: opts.body ? { "Content-Type": "application/json" } : undefined,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+    cache: "no-store",
+  });
+  let data = {};
+  try { data = await res.json(); } catch (e) { /* 非 JSON 就是服务端挂了 */ }
+  if (!res.ok || data.ok === false) {
+    const err = new Error(data.error || `HTTP ${res.status}`);
+    err.code = data.code || "";
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+/* ================================================================ 目录授权 */
+
+async function getDir(path, create) {
+  let dir = S.handle;
+  for (const part of String(path || "").split("/").filter(Boolean)) {
+    dir = await dir.getDirectoryHandle(part, { create: !!create });
+  }
+  return dir;
+}
+
+async function readViaPicker(path) {
+  const parts = path.split("/");
+  const name = parts.pop();
+  const dir = await getDir(parts.join("/"));
+  const fh = await dir.getFileHandle(name);
+  const file = await fh.getFile();
+  return { text: await file.text(), mtime: file.lastModified / 1000 };
+}
+
+async function writeViaPicker(path, text) {
+  const parts = path.split("/");
+  const name = parts.pop();
+  const dir = await getDir(parts.join("/"), true);
+  const fh = await dir.getFileHandle(name, { create: true });
+  const w = await fh.createWritable();
+  await w.write(text);
+  await w.close();
+}
+
+/* ================================================================ IndexedDB：目录句柄持久化 */
+
+function idbOpen() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("memory-ui", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("kv");
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+
+async function idbSet(key, value) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction("kv", "readwrite");
+    tx.objectStore("kv").put(value, key);
+    tx.oncomplete = () => { db.close(); res(); };
+    tx.onerror = () => { db.close(); rej(tx.error); };
+  });
+}
+
+async function idbGet(key) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction("kv", "readonly");
+    const rq = tx.objectStore("kv").get(key);
+    rq.onsuccess = () => { db.close(); res(rq.result); };
+    rq.onerror = () => { db.close(); rej(rq.error); };
+  });
+}
+
+async function attachHandle(handle, silent) {
+  if (!handle) return false;
+  if (handle.queryPermission) {
+    let perm = await handle.queryPermission({ mode: "readwrite" });
+    if (perm !== "granted") {
+      if (silent) return false;
+      perm = await handle.requestPermission({ mode: "readwrite" });
+    }
+    if (perm !== "granted") return false;
+  }
+  S.handle = handle;
+  await idbSet("root", handle).catch(() => {});
+  return true;
+}
+
+$("#pickBtn").addEventListener("click", async () => {
+  if (!window.showDirectoryPicker) {
+    toast("这个浏览器不支持文件访问，请用 Chrome / Edge 打开 http://localhost", true);
+    return;
+  }
+  try {
+    const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+    const ok = await (async () => {
+      try {
+        const fh = await handle.getFileHandle("config.json");
+        const f = await fh.getFile();
+        return (await f.text()).includes("defaultAgent");
+      } catch (e) { return false; }
+    })();
+    if (!ok) {
+      toast("这个目录不像记忆库（找不到 config.json），请选 ~/.memory", true);
+      return;
+    }
+    if (!(await attachHandle(handle, true))) {
+      toast("没有拿到写入权限", true);
+      return;
+    }
+    toast("已连接本地目录");
+    if (!S.server) {
+      S.root = S.root || "<本地目录>";
+      $("#rootLabel").textContent = handle.name;
+      setMode("本地目录", "warn");
+      await loadMemory();
+      await loadPersonaLocal();
+    } else {
+      renderConn();
+    }
+    refreshButtons();
+  } catch (e) {
+    if (e.name !== "AbortError") toast("连接失败：" + e.message, true);
+  }
+});
+
+/* ================================================================ 页签 */
+
+$$(".tabs button").forEach((btn) => {
+  btn.addEventListener("click", () => showTab(btn.dataset.tab));
+});
+
+async function showTab(name) {
+  $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+  $$("section.tab").forEach((s) => s.classList.toggle("active", s.id === "tab-" + name));
+  const loader = {
+    overview: loadOverview,
+    memory: loadMemory,
+    persona: loadPersona,
+    checkup: loadCheckup,
+    config: loadConfigForm,
+  }[name];
+  if (!loader || S.loaded.has(name)) return;
+  try {
+    await loader();
+    S.loaded.add(name);
+  } catch (e) {
+    toast(`${name} 加载失败：${e.message}`, true);
+  }
+}
+
+/* ================================================================ 概览 */
+
+async function loadOverview(agent) {
+  if (!S.server) {
+    $("#ovHint").textContent = "服务端没起来。跑 `python ui/serve.py`，或者从 serve.py 打开的地址访问这一页。";
+    $("#ovMode").textContent = "（未连接）";
+    return;
+  }
+  const params = new URLSearchParams();
+  if (agent) params.set("agent", agent);
+  if (S.cwd) params.set("cwd", S.cwd);
+  const qs = params.toString();
+  const data = await api("/api/overview" + (qs ? `?${qs}` : ""));
+  S.overview = data;
+  S.root = data.root;
+  S.ovAgent = data.agent;
+  setStatusbar();
+  renderConn();
+  renderAgentPicker(data);
+  renderInjection(data.injected);
+  renderProjects(data.projects);
+  renderFocusInbox(data);
+  renderAgents(data);
+}
+
+/* 注入预演的身份与目录。数字会随这两项变化，所以先把它们摆出来，
+   免得看的人以为「3,481 字符」是唯一答案。 */
+function renderAgentPicker(data) {
+  const sel = $("#ovAgent");
+  const names = data.agentNames || [];
+  sel.replaceChildren(...names.map((n) => h("option", { value: n, text: n })));
+  sel.value = data.agent || "";
+  sel.disabled = names.length < 2;
+
+  const bits = [`cwd ${data.cwd || "?"}`];
+  bits.push(data.projectBook ? `项目册 ${data.projectBook}` : "不在任何项目册里（kind 为空）");
+  if (data.agentFellBack) bits.push(`指定的身份不存在，已回退到 ${data.agent}`);
+  $("#ovCwd").textContent = bits.join(" · ");
+}
+
+function renderConn() {
+  $("#rootLabel").textContent = S.root || "未连接";
+  $("#ovMode").textContent = S.server ? `服务端 · ${S.root}` : "本地目录";
+  const kv = $("#ovKv");
+  kv.replaceChildren();
+  const rows = [
+    ["记忆库", S.root || "—"],
+    ["服务端", S.server ? "python ui/serve.py" : "未连接（只读预览 / 目录授权写入）"],
+    ["本地目录", S.handle ? S.handle.name : "未连接"],
+    ["config", S.overview && S.overview.config ? "已加载" : "—"],
+  ];
+  for (const [k, v] of rows) kv.append(h("dt", { text: k }), h("dd", { class: "mono", text: v }));
+  $("#ovHint").textContent = S.server
+    ? "服务端数据来自 core/memory.py 现算。结构化写入（项目册元信息、人格、设置）带备份和冲突检测。"
+    : "从 serve.py 打开才能看到真实数据；直接双击 html 只能做目录授权后的自由文本编辑。";
+}
+
+function renderInjection(inj) {
+  const meter = $("#ovMeter");
+  const line = $("#ovInjectLine");
+  const warnBox = $("#ovWarnings");
+  const filesBox = $("#ovInjectedFiles");
+  warnBox.replaceChildren();
+  filesBox.replaceChildren();
+
+  if (!inj || inj.error) {
+    meter.querySelector("i").style.width = "0";
+    meter.classList.remove("over");
+    line.textContent = "渲染器出错：" + (inj && inj.error ? inj.error : "没有数据");
+    line.style.color = "var(--err)";
+    return;
+  }
+  line.style.color = "";
+  const pct = Math.min(100, Math.round((inj.chars / Math.max(1, inj.maxChars)) * 100));
+  meter.querySelector("i").style.width = pct + "%";
+  const over = inj.chars > inj.maxChars;
+  meter.classList.toggle("over", over);
+  line.textContent = `${num(inj.chars)} / ${num(inj.maxChars)} 字符（${pct}%）· agent ${inj.agent}`
+    + (inj.kind ? ` · kind ${inj.kind}` : " · 没 kind（不注入 playbook）")
+    + (over ? " —— 超预算，focus 和日志可能被截断" : "");
+
+  if (inj.warnings && inj.warnings.length) {
+    warnBox.append(h("h3", { text: "告警" }));
+    warnBox.append(h("ul", { class: "plain" }, inj.warnings.map((w) => h("li", { text: w }))));
+  }
+
+  const files = inj.injected || [];
+  filesBox.append(h("h3", { text: `实际注入 ${files.length} 个文件` }));
+  if (files.length) {
+    filesBox.append(h("div", { class: "chips", style: "margin-top:8px" },
+      files.map((p) => h("span", { class: "badge", text: p }))));
+  } else {
+    filesBox.append(h("p", { class: "empty", text: "一个都没注入——检查 config.json 的 inject.order" }));
+  }
+}
+
+function renderProjects(projects) {
+  const box = $("#ovProjects");
+  box.replaceChildren();
+  $("#ovProjectsSub").textContent = `${(projects || []).length} 本`;
+  if (!projects || !projects.length) {
+    box.append(h("p", { class: "empty", text: "注册表是空的。跑 `init --project <路径>` 或手写 workspaces.json" }));
+    return;
+  }
+  const rows = projects.map((p) => {
+    const statusBadge = h("span", {
+      class: "badge " + (p.state === "ok" ? (p.status === "进行中" ? "ok" : "warn") : "err"),
+      text: p.state === "ok" ? (p.status || "无状态") : "路径丢失",
+    });
+    return h("tr", {},
+      h("td", {}, h("div", { text: p.title || p.id }), h("div", { class: "path", text: p.path })),
+      h("td", {}, statusBadge),
+      h("td", {}, p.kind
+        ? h("span", { class: "badge " + (p.kind_ok ? "accent" : "err"), text: p.kind })
+        : h("span", { class: "badge warn", text: "没写" })),
+      h("td", { class: "path", text: p.last_active || "无记录" }),
+      h("td", {}, p.git_dirty ? h("span", { class: "badge warn", text: "有未提交" }) : ""),
+    );
+  });
+  box.append(h("table", {},
+    h("thead", {}, h("tr", {},
+      h("th", { text: "册子" }), h("th", { text: "status" }),
+      h("th", { text: "kind" }), h("th", { text: "最后动过" }), h("th", { text: "" }))),
+    h("tbody", {}, rows)));
+}
+
+function renderFocusInbox(data) {
+  const fbox = $("#ovFocus");
+  const ibox = $("#ovInbox");
+  $("#ovFocusChars").textContent = `${num(data.focusChars || 0)} 字符`;
+  $("#ovFocusChars").className = "badge " + ((data.focusChars || 0) > 600 ? "err" : "ok");
+  fbox.replaceChildren();
+  ibox.replaceChildren();
+
+  const empty = (box, text) => box.append(h("p", { class: "empty", text }));
+  if (!data.focus || !data.focus.length) empty(fbox, "焦点是空的");
+  else {
+    fbox.append(h("ul", { class: "plain" }, data.focus.map((it) =>
+      h("li", {}, h("span", { class: "date", text: it.date || "" }), it.body))));
+  }
+  if (!data.inbox || !data.inbox.length) empty(ibox, "待办是空的");
+  else {
+    ibox.append(h("ul", { class: "plain" }, data.inbox.map((it) =>
+      h("li", {}, h("span", { class: "date", text: it.date || "" }), it.body))));
+  }
+}
+
+function renderAgents(data) {
+  const box = $("#ovAgents");
+  box.replaceChildren();
+  const agents = data.agents || [];
+  if (!agents.length) {
+    box.append(h("p", { class: "empty", text: "没有 agent 目录" }));
+  } else {
+    box.append(h("table", {},
+      h("thead", {}, h("tr", {},
+        h("th", { text: "agent" }), h("th", { text: "最近日志" }),
+        h("th", { text: "日志天数" }), h("th", { text: "记在哪" }))),
+      h("tbody", {}, agents.map((a) => h("tr", {},
+        h("td", { class: "mono", text: a.id }),
+        h("td", { class: "mono", text: a.latestLog || "（没写过）" }),
+        h("td", { class: "num", text: num(a.logDays) }),
+        h("td", { class: "mono muted", text: a.logWhere || "—" }))))));
+  }
+  const git = data.git || {};
+  $("#ovGit").textContent = git.last
+    ? `git ${git.last}${git.dirty ? ` · ${git.dirty} 个文件未提交` : ""}`
+    : "git：（这个目录不是仓库）";
+}
+
+$("#ovReload").addEventListener("click", async () => {
+  try { await loadOverview(S.ovAgent || undefined); toast("已重新测量注入"); }
+  catch (e) { toast("刷新失败：" + e.message, true); }
+});
+
+$("#ovAgent").addEventListener("change", async (e) => {
+  try { await loadOverview(e.target.value); }
+  catch (err) { toast("换身份失败：" + err.message, true); }
+});
+
+/* ================================================================ 记忆 */
+
+async function walkPicker(dir, prefix, out, depth) {
+  if (depth > 6) return;
+  for await (const [name, handle] of dir.entries()) {
+    if (name.startsWith(".") || name === "node_modules") continue;
+    const p = prefix ? prefix + "/" + name : name;
+    if (handle.kind === "directory") await walkPicker(handle, p, out, depth + 1);
+    else if (name.endsWith(".md")) {
+      let size = 0, mtime = 0;
+      try { const f = await handle.getFile(); size = f.size; mtime = f.lastModified / 1000; } catch (e) {}
+      out.push({ path: p, size, mtime });
+    }
+  }
+}
+
+async function loadMemory() {
+  const tree = $("#memTree");
+  tree.replaceChildren(h("p", { class: "empty", text: "加载中…" }));
+  if (S.server) {
+    const data = await api("/api/tree");
+    S.tree = data.files || [];
+  } else if (S.handle) {
+    const out = [];
+    await walkPicker(S.handle, "", out, 0);
+    S.tree = out;
+  } else {
+    S.tree = [];
+  }
+  $("#memSub").textContent = `${S.tree.length} 个 md 文件`;
+  renderTree();
+  refreshButtons();
+}
+
+function renderTree() {
+  const box = $("#memTree");
+  box.replaceChildren();
+  const q = S.query.trim().toLowerCase();
+  const files = S.tree.filter((f) => {
+    if (q && !f.path.toLowerCase().includes(q)) return false;
+    if (S.filter !== "all" && !f.path.startsWith(S.filter + "/") && f.path !== S.filter) return false;
+    return true;
+  });
+  if (!files.length) {
+    box.append(h("p", { class: "empty", text: S.tree.length ? "没有匹配的文件" : "没有可读的 md 文件" }));
+    return;
+  }
+  const groups = new Map();
+  for (const f of files) {
+    const parts = f.path.split("/");
+    const key = parts.length > 1 ? parts[0] : "（根目录）";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  }
+  for (const [key, list] of groups) {
+    const details = h("details", { class: "group", open: true },
+      h("summary", { text: `${key} · ${list.length}` }),
+      h("div", { class: "body" }, list.map((f) => h("div", {
+        class: "list-item" + (S.file && S.file.path === f.path ? " active" : ""),
+        onclick: () => openMemoryFile(f.path),
+      },
+      h("span", { class: "name", text: f.path.split("/").slice(1).join("/") || f.path }),
+      h("span", { class: "meta", text: f.size ? `${(f.size / 1024).toFixed(1)} KB` : "" })))));
+    box.append(details);
+  }
+}
+
+async function openMemoryFile(path) {
+  const ta = $("#memText");
+  try {
+    let text, mtime = 0;
+    if (S.server) {
+      const data = await api("/api/file?path=" + encodeURIComponent(path));
+      text = data.text; mtime = data.mtime;
+    } else {
+      const r = await readViaPicker(path);
+      text = r.text; mtime = r.mtime;
+    }
+    S.file = { path, text, mtime };
+    $("#memPath").textContent = path;
+    ta.value = text;
+    markDirty("memory", false);
+    $("#memBadge").textContent = S.handle ? "可编辑" : "只读";
+    $("#memBadge").className = "badge " + (S.handle ? "ok" : "warn");
+    ta.disabled = !S.handle;
+    $("#memHint").textContent = S.handle
+      ? "写入走浏览器目录授权，服务端不碰自由文本"
+      : "没连目录：只能预览。要点「连接本地目录…」";
+    renderTree();
+    refreshButtons();
+  } catch (e) {
+    toast("打不开：" + e.message, true);
+  }
+}
+
+$("#memText").addEventListener("input", () => {
+  if (!S.file) return;
+  markDirty("memory", $("#memText").value !== S.file.text);
+});
+
+// 用页面内的确认条代替 confirm()：浏览器原生对话框会阻塞整个页面，
+// 之前的版本就是在这里把标签页卡死（我在 devtools 里点不到任何东西）。
+function askOverwrite(msg) {
+  return new Promise((resolve) => {
+    const bar = document.createElement("div");
+    bar.className = "conflict";
+    const label = document.createElement("span");
+    label.textContent = msg;
+    const force = document.createElement("button");
+    force.className = "btn";
+    force.textContent = "仍然覆盖";
+    const cancel = document.createElement("button");
+    cancel.className = "btn";
+    cancel.textContent = "放弃";
+    bar.append(label, force, cancel);
+    const done = (v) => { bar.remove(); resolve(v); };
+    force.addEventListener("click", () => done(true));
+    cancel.addEventListener("click", () => done(false));
+    $("#memWrap").prepend(bar);
+  });
+}
+
+$("#memSave").addEventListener("click", async () => {
+  if (!S.file) return;
+  if (!S.handle) { toast("没连目录，写不了", true); return; }
+  try {
+    if (S.server) {
+      // 先在服务端取一次，确认这中间没别人改过
+      const latest = await api("/api/file?path=" + encodeURIComponent(S.file.path)).catch(() => null);
+      if (latest && Math.abs(latest.mtime - S.file.mtime) > 0.001) {
+        if (!await askOverwrite("「" + S.file.path + "」在打开后被改过，覆盖会丢掉那次改动。")) return;
+      }
+    }
+    const text = $("#memText").value;
+    await writeViaPicker(S.file.path, text);
+    S.file.text = text;
+    markDirty("memory", false);
+    toast("已保存");
+    refreshButtons();
+  } catch (e) {
+    toast("保存失败：" + e.message, true);
+  }
+});
+
+$("#memRevert").addEventListener("click", () => {
+  if (!S.file) return;
+  $("#memText").value = S.file.text;
+  markDirty("memory", false);
+  refreshButtons();
+});
+
+$("#memSearch").addEventListener("input", (e) => {
+  S.query = e.target.value;
+  renderTree();
+});
+
+$$("#memChips .chip").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    S.filter = chip.dataset.f;
+    $$("#memChips .chip").forEach((c) => c.classList.toggle("active", c === chip));
+    renderTree();
+  });
+});
+
+/* ================================================================ 人格：SOUL */
+
+function parseSoul(md) {
+  const lines = md.split("\n");
+  const head = [];
+  const sections = [];
+  let cur = null;
+  for (const line of lines) {
+    if (line.startsWith("## ")) {
+      if (cur) sections.push(cur);
+      cur = { title: line.slice(3).trim(), body: [] };
+    } else if (cur) cur.body.push(line);
+    else head.push(line);
+  }
+  if (cur) sections.push(cur);
+  // body 一律给字符串：buildSoul / textarea 都按字符串用，留着行数组会在
+  // 「读不到 SOUL.md：s.body.replace is not a function」这种地方炸出来
+  return {
+    head: head.join("\n"),
+    sections: sections.map((s) => ({ title: s.title, body: s.body.join("\n") })),
+  };
+}
+
+function buildSoul(head, sections) {
+  let out = head.replace(/\s+$/, "") + "\n";
+  for (const s of sections) {
+    out += "\n## " + s.title + "\n";
+    const body = s.body.replace(/^\n+/, "").replace(/\s+$/, "");
+    if (body) out += "\n" + body + "\n";
+  }
+  return out;
+}
+
+async function loadPersona() {
+  if (S.server && !S.overview) await loadOverview();
+  await loadAgentList();
+  await loadSoul();
+  await loadProjectList();
+}
+
+async function loadPersonaLocal() {
+  await loadAgentList();
+  await loadSoul();
+}
+
+async function loadAgentList() {
+  const sel = $("#agentSelect");
+  const previous = S.agent;
+  sel.replaceChildren();
+  let names = [];
+  if (S.server && S.overview) names = (S.overview.agents || []).map((a) => a.id);
+  else if (S.handle) {
+    try {
+      const dir = await getDir("agents");
+      for await (const [name, handle] of dir.entries()) {
+        if (handle.kind !== "directory") continue;
+        let legacy = false;
+        try { await (await getDir("agents/" + name)).getFileHandle(".legacy"); legacy = true; } catch (e) {}
+        if (legacy) continue;
+        names.push(name);
+      }
+      names.sort();
+    } catch (e) { names = []; }
+  }
+  if (!names.length) {
+    sel.append(h("option", { value: "", text: "（没有 agent）" }));
+    return;
+  }
+  for (const n of names) sel.append(h("option", { value: n, text: n }));
+  S.agent = names.includes(previous) ? previous : names[0];
+  sel.value = S.agent;
+}
+
+async function loadSoul() {
+  const box = $("#soulEditor");
+  const path = S.agent ? `agents/${S.agent}/SOUL.md` : "";
+  if (!path) {
+    box.replaceChildren(h("p", { class: "empty", text: "没有可编辑的 agent" }));
+    return;
+  }
+  box.replaceChildren(h("p", { class: "empty", text: "加载中…" }));
+  try {
+    let text, mtime = 0;
+    if (S.server) {
+      const data = await api("/api/file?path=" + encodeURIComponent(path));
+      text = data.text; mtime = data.mtime;
+    } else if (S.handle) {
+      const r = await readViaPicker(path);
+      text = r.text; mtime = r.mtime;
+    } else {
+      box.replaceChildren(h("p", { class: "empty", text: "连上服务端或本地目录才能读人格文件" }));
+      return;
+    }
+    const parsed = parseSoul(text);
+    S.soul = { head: parsed.head, sections: parsed.sections, raw: text, mtime, path };
+    box.replaceChildren();
+    if (!parsed.sections.length) {
+      box.append(h("p", { class: "empty", text: "这个文件没有 ## 小节，无法分段编辑" }));
+      return;
+    }
+    parsed.sections.forEach((s, i) => {
+      const ta = h("textarea", { "data-index": i, style: "min-height:120px" });
+      ta.value = s.body.replace(/^\n+/, "").replace(/\s+$/, "");
+      ta.addEventListener("input", () => {
+        const next = buildSoul(S.soul.head, [...box.querySelectorAll("textarea")].map((t, j) => ({
+          title: S.soul.sections[j].title, body: t.value,
+        })));
+        markDirty("soul", next !== S.soul.raw);
+      });
+      box.append(h("div", { style: "margin-bottom:16px" },
+        h("div", { style: "font-size:12.5px;color:var(--muted);margin-bottom:6px", text: s.title }), ta));
+    });
+    markDirty("soul", false);
+  } catch (e) {
+    box.replaceChildren(h("p", { class: "empty", text: `读不到 ${path}：${e.message}` }));
+  }
+  refreshButtons();
+}
+
+$("#agentSelect").addEventListener("change", async (e) => {
+  S.agent = e.target.value;
+  await loadSoul();
+});
+
+$("#soulReload").addEventListener("click", loadSoul);
+
+$("#soulSave").addEventListener("click", async () => {
+  if (!S.soul) return;
+  const box = $("#soulEditor");
+  const tas = [...box.querySelectorAll("textarea")];
+  if (tas.length !== S.soul.sections.length) {
+    toast("段落数量对不上，可能文件被改过，请重新加载", true);
+    return;
+  }
+  const next = buildSoul(S.soul.head, S.soul.sections.map((s, i) => ({ title: s.title, body: tas[i].value })));
+  try {
+    if (S.server) {
+      const res = await api("/api/soul", { method: "POST", body: { agent: S.agent, text: next, mtime: S.soul.mtime } });
+      S.soul.mtime = res.mtime;
+    } else {
+      await writeViaPicker(S.soul.path, next);
+    }
+    S.soul.raw = next;
+    markDirty("soul", false);
+    toast("人格已保存");
+    refreshButtons();
+  } catch (e) {
+    toast((e.code === "conflict" ? "文件被改过：" : "保存失败：") + e.message, true);
+  }
+});
+
+/* ================================================================ 人格：项目册元信息 */
+
+async function loadProjectList() {
+  const sel = $("#projectSelect");
+  sel.replaceChildren();
+  if (!S.server) {
+    sel.append(h("option", { value: "", text: "（需要服务端）" }));
+    setMetaHint("项目册元信息要靠服务端写：跑 `python ui/serve.py`");
+    return;
+  }
+  const projects = (S.overview && S.overview.projects) || [];
+  if (!projects.length) {
+    sel.append(h("option", { value: "", text: "（没有登记的项目册）" }));
+    return;
+  }
+  for (const p of projects) {
+    sel.append(h("option", {
+      value: p.path,
+      text: `${p.title || p.id}${p.state === "ok" ? "" : "（路径丢失）"}`,
+    }));
+  }
+  S.project = projects.some((p) => p.path === S.project) ? S.project : projects[0].path;
+  sel.value = S.project;
+  await loadMeta();
+}
+
+function setMetaHint(text) {
+  $("#pmHint").textContent = text;
+}
+
+async function loadMeta() {
+  if (!S.project) return;
+  const fields = ["#pmTitle", "#pmStatus", "#pmKind", "#pmPosition", "#pmForbidden", "#pmPre", "#pmHints"];
+  try {
+    const data = await api("/api/project-meta?path=" + encodeURIComponent(S.project));
+    S.meta = data;
+    $("#pmTitle").value = data.title || "";
+    $("#pmPosition").value = data.position || "";
+    $("#pmForbidden").value = data.forbidden || "";
+    $("#pmPre").value = data.pre_actions || "";
+    $("#pmHints").value = data.hints || "";
+
+    const statusSel = $("#pmStatus");
+    statusSel.replaceChildren();
+    const statuses = (S.overview && S.overview.statusValues) || ["进行中", "待启动", "搁置"];
+    const all = statuses.includes(data.status) || !data.status ? statuses : [...statuses, data.status];
+    for (const s of all) statusSel.append(h("option", { value: s, text: data.status && s === data.status && !statuses.includes(s) ? `${s}（现有）` : s }));
+    statusSel.value = data.status || statuses[0];
+
+    const kindSel = $("#pmKind");
+    kindSel.replaceChildren(h("option", { value: "", text: "（不写 kind）" }));
+    const kinds = (S.overview && S.overview.kinds) || [];
+    for (const k of kinds) kindSel.append(h("option", { value: k, text: k }));
+    if (data.kind && !kinds.includes(data.kind)) kindSel.append(h("option", { value: data.kind, text: `${data.kind}（现有，不在 playbooks 里）` }));
+    kindSel.value = data.kind || "";
+
+    fields.forEach((sel) => { $(sel).disabled = false; });
+    $("#pmSave").disabled = false;
+    $("#pmReload").disabled = false;
+    markDirty("meta", false);
+    updatePosCount();
+    setMetaHint(`读自 ${data.path}/.memory/_meta.md`);
+  } catch (e) {
+    fields.forEach((sel) => { $(sel).disabled = true; });
+    $("#pmSave").disabled = true;
+    setMetaHint("读取失败：" + e.message);
+  }
+  refreshButtons();
+}
+
+function updatePosCount() {
+  $("#pmPosCount").textContent = $("#pmPosition").value.length;
+}
+
+["#pmTitle", "#pmStatus", "#pmKind", "#pmPosition", "#pmForbidden", "#pmPre", "#pmHints"].forEach((sel) => {
+  $(sel).addEventListener("input", () => { markDirty("meta", true); if (sel === "#pmPosition") updatePosCount(); });
+  $(sel).addEventListener("change", () => markDirty("meta", true));
+});
+
+$("#projectSelect").addEventListener("change", (e) => {
+  S.project = e.target.value;
+  loadMeta();
+});
+
+$("#pmReload").addEventListener("click", loadMeta);
+
+$("#pmSave").addEventListener("click", async () => {
+  if (!S.project) return;
+  const fields = {
+    mtime: S.meta ? S.meta.mtime : null,
+    title: $("#pmTitle").value,
+    status: $("#pmStatus").value,
+    kind: $("#pmKind").value,
+    position: $("#pmPosition").value,
+    forbidden: $("#pmForbidden").value,
+    pre_actions: $("#pmPre").value,
+    hints: $("#pmHints").value,
+  };
+  try {
+    const res = await api("/api/project-meta", { method: "POST", body: { path: S.project, fields } });
+    S.meta.mtime = res.mtime;
+    markDirty("meta", false);
+    toast(res.changed && res.changed.length ? `已保存：${res.changed.join("、")}` : "没有改动");
+    if (S.server) { S.overview = null; S.loaded.delete("overview"); }
+  } catch (e) {
+    const prefix = e.code === "conflict" ? "文件被改过（先点重新加载）："
+      : e.code === "invalid" ? "格式不对：" : "保存失败：";
+    toast(prefix + e.message, true);
+  }
+});
+
+/* ================================================================ 体检 */
+
+async function loadCheckup() {
+  if (!S.server) {
+    $("#ckBody").replaceChildren(h("p", { class: "empty", text: "体检要靠服务端跑：python ui/serve.py" }));
+    $("#ckSummary").textContent = "未连接";
+    return;
+  }
+  const body = $("#ckBody");
+  body.replaceChildren(h("p", { class: "empty", text: "体检中…" }));
+  const all = $("#ckAll").checked ? "1" : "0";
+  let data;
+  try {
+    data = await api("/api/checkup?all=" + all);
+  } catch (e) {
+    body.replaceChildren(h("p", { class: "empty", text: "体检失败：" + e.message }));
+    return;
+  }
+  S.checkup = data;
+  $("#ckExport").disabled = false;
+
+  const counts = data.counts || {};
+  const total = (data.problems || []).length;
+  $("#ckSummary").textContent = total
+    ? `发现 ${total} 个问题：严重 ${counts["严重"] || 0} · 该修 ${counts["该修"] || 0} · 建议 ${counts["建议"] || 0}`
+    + ` · 日志扫描 ${(data.logScan || []).join("、") || "无"}`
+    : `没有发现问题。日志扫描 ${(data.logScan || []).join("、") || "无"}`;
+
+  body.replaceChildren();
+  if (total) {
+    body.append(h("table", {},
+      h("thead", {}, h("tr", {},
+        h("th", { text: "级别" }), h("th", { text: "对象" }), h("th", { text: "问题" }), h("th", { text: "怎么办" }))),
+      h("tbody", {}, (data.problems || []).map((p) => h("tr", {},
+        h("td", {}, h("span", {
+          class: "badge " + (p.level === 1 ? "err" : p.level === 2 ? "warn" : ""),
+          text: p.levelName || String(p.level),
+        })),
+        h("td", { class: "mono", text: p.object }),
+        h("td", { text: p.desc }),
+        h("td", { class: "path", text: p.action }))))));
+    if (data.topActions && data.topActions.length) {
+      body.append(h("h3", { text: "最该做的三件事", style: "margin-top:16px" }));
+      body.append(h("ol", { class: "plain" }, data.topActions.map((t) => h("li", { text: `${t.action}（${t.object}）` }))));
+    }
+  } else {
+    body.append(h("p", { class: "empty", text: "体检通过。" }));
+  }
+
+  const stale = data.stale || [];
+  const card = $("#ckStaleCard");
+  card.style.display = stale.length ? "" : "none";
+  const sbox = $("#ckStale");
+  sbox.replaceChildren();
+  if (stale.length) {
+    sbox.append(h("table", {},
+      h("thead", {}, h("tr", {}, h("th", { text: "文件" }), h("th", { text: "情况" }))),
+      h("tbody", {}, stale.map((s) => h("tr", {},
+        h("td", { class: "path", text: s.path }),
+        h("td", { text: s.kind === "stale" ? `${s.days} 天未读` : "从未记录过访问" }))))));
+    sbox.append(h("p", { class: "hint", text: "只是候选，不是结论。没被读不等于没用——禁区、注意事项本来就很少被单独打开。" }));
+  }
+}
+
+$("#ckRun").addEventListener("click", async () => { await loadCheckup(); toast("已重新体检"); });
+
+$("#ckExport").addEventListener("click", () => {
+  if (!S.checkup) return;
+  const blob = new Blob([JSON.stringify(S.checkup, null, 2)], { type: "application/json" });
+  const a = h("a", { href: URL.createObjectURL(blob), download: "memory-checkup.json" });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+
+/* ================================================================ 设置 */
+
+const CFG_INPUTS = {
+  "inject.maxChars": "#cfg-maxChars",
+  "digest.enabled": "#cfg-digestEnabled",
+  "digest.afterMinutes": "#cfg-afterMinutes",
+  "digest.minTurns": "#cfg-minTurns",
+  "digest.cooldownMinutes": "#cfg-cooldownMinutes",
+  "digest.maxPerSession": "#cfg-maxPerSession",
+  "archive.staleDays": "#cfg-staleDays",
+  "sync.enabled": "#cfg-syncEnabled",
+  "sync.remote": "#cfg-syncRemote",
+};
+
+function readConfigInputs() {
+  const patch = {};
+  for (const [key, sel] of Object.entries(CFG_INPUTS)) {
+    const [section, name] = key.split(".");
+    const el = $(sel);
+    (patch[section] = patch[section] || {})[name] = el.type === "checkbox" ? el.checked
+      : el.type === "number" ? Number(el.value || 0)
+      : el.value.trim();
+  }
+  return patch;
+}
+
+function fillConfigInputs(cfg, defaults) {
+  const get = (path) => {
+    const [a, b] = path.split(".");
+    const block = (cfg && cfg[a]) || (defaults && defaults[a]) || {};
+    return block[b];
+  };
+  for (const [key, sel] of Object.entries(CFG_INPUTS)) {
+    const el = $(sel);
+    const v = get(key);
+    if (el.type === "checkbox") el.checked = v !== false && v !== undefined;
+    else el.value = v === undefined ? "" : v;
+  }
+}
+
+async function loadConfigForm() {
+  const hint = $("#cfgHint");
+  if (!S.server) {
+    hint.textContent = "设置要靠服务端写：python ui/serve.py";
+    $("#cfgSave").disabled = true;
+    return;
+  }
+  const data = await api("/api/config");
+  S.config = data.config;
+  S.defaults = data.defaults;
+  fillConfigInputs(data.config, data.defaults);
+  $("#cfgSave").disabled = false;
+  markDirty("config", false);
+  hint.textContent = data.exists ? `读自 ${data.path}` : "config.json 不存在，保存会新建（值来自内置默认）";
+
+  const order = (data.config.inject && data.config.inject.order) || [];
+  const box = $("#cfgOrder");
+  box.replaceChildren();
+  if (!order.length) {
+    box.append(h("p", { class: "empty", text: "order 是空的——一个文件都不会注入" }));
+    return;
+  }
+  box.append(h("table", {},
+    h("thead", {}, h("tr", {},
+      h("th", { text: "#" }), h("th", { text: "path" }), h("th", { text: "优先级" }), h("th", { text: "标记" }))),
+    h("tbody", {}, order.map((o, i) => h("tr", {},
+      h("td", { class: "num", text: String(i + 1) }),
+      h("td", { class: "path", text: o.path }),
+      h("td", { class: "num", text: String(o.priority == null ? "" : o.priority) }),
+      h("td", { text: [
+        o.required ? "required" : "",
+        o.route ? "route" : "",
+        o.tailLines ? `tail ${o.tailLines}` : "",
+        o.countOnly ? "countOnly" : "",
+      ].filter(Boolean).join(" · ") }))))));
+}
+
+$("#cfgReload").addEventListener("click", async () => {
+  try { await loadConfigForm(); toast("已重新加载"); }
+  catch (e) { toast("加载失败：" + e.message, true); }
+});
+
+$("#cfgSave").addEventListener("click", async () => {
+  const patch = readConfigInputs();
+  try {
+    const res = await api("/api/config", { method: "POST", body: { patch } });
+    markDirty("config", false);
+    toast(res.changed && res.changed.length ? `已保存：${res.changed.join("、")}` : "没有改动");
+    if (S.server) { S.overview = null; S.loaded.delete("overview"); }
+  } catch (e) {
+    toast("保存失败：" + e.message, true);
+  }
+});
+
+Object.values(CFG_INPUTS).forEach((sel) => {
+  const el = $(sel);
+  el.addEventListener("input", () => markDirty("config", true));
+  el.addEventListener("change", () => markDirty("config", true));
+});
+
+/* ================================================================ 按钮联动 / 快捷键 */
+
+function refreshButtons() {
+  const ed = !!S.handle;
+  const hasFile = !!S.file;
+  $("#memSave").disabled = !(hasFile && ed);
+  $("#memRevert").disabled = !hasFile;
+  $("#soulSave").disabled = !(S.soul && S.soul.sections.length);
+  $("#soulReload").disabled = !S.agent;
+  $("#pmSave").disabled = !(S.server && S.project && S.meta);
+  $("#cfgSave").disabled = !S.server;
+  markDirty();
+}
+
+function saveActive() {
+  const tab = $(".tabs button.active");
+  const name = tab ? tab.dataset.tab : "";
+  if (name === "memory") $("#memSave").click();
+  else if (name === "persona") {
+    if (S.dirty.get("soul")) $("#soulSave").click();
+    else if (S.dirty.get("meta")) $("#pmSave").click();
+  } else if (name === "config") $("#cfgSave").click();
+}
+
+document.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "s") return;
+  e.preventDefault();
+  saveActive();
+});
+
+window.addEventListener("beforeunload", (e) => {
+  if (!S.dirty.size) return;
+  e.preventDefault();
+  e.returnValue = "";
+});
+
+/* ================================================================ 启动 */
+
+async function boot() {
+  // 1. 探测服务端
+  try {
+    const data = await api("/api/overview");
+    S.server = true;
+    S.overview = data;
+    S.root = data.root;
+    setMode("服务端", "ok");
+  } catch (e) {
+    S.server = false;
+    setMode("未连接", "warn");
+  }
+
+  // 2. 恢复上次授权的目录（静默，没权限就算了）
+  try {
+    const handle = await idbGet("root");
+    if (handle) await attachHandle(handle, true);
+  } catch (e) { /* IndexedDB 不可用就当没有 */ }
+
+  if (S.handle && !S.server) {
+    $("#rootLabel").textContent = S.handle.name;
+  }
+  $("#ovMode").textContent = S.server ? `服务端 · ${S.root || ""}` : "未连接";
+
+  if (S.server) {
+    setStatusbar();
+    renderConn();
+    await loadOverview();
+    S.loaded.add("overview");
+  } else {
+    $("#ovHint").textContent =
+      "没连上服务端。跑 `python ui/serve.py` 会开这一页并带上真实数据；"
+      + "现在只能用「连接本地目录…」做自由文本编辑。";
+    $("#ovMode").textContent = "本地目录模式";
+  }
+  refreshButtons();
+}
+
+boot();
+</script>
+</body>
+</html>

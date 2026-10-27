@@ -1,0 +1,12 @@
+{
+  "name": "local-moxie",
+  "description": "本地自用插件",
+  "plugins": [
+    {
+      "name": "memory",
+      "description": "长期记忆：会话开始时注入人格、身份、分册索引与近期日志",
+      "source": "./plugins/memory",
+      "version": "0.1.0"
+    }
+  ]
+}
