@@ -33,6 +33,7 @@ import os
 import re
 import subprocess
 import sys
+import uuid
 from datetime import date, datetime
 from hashlib import sha1
 from pathlib import Path
@@ -100,6 +101,10 @@ FOCUS_STALE_DAYS = 7     # 一条超过 7 天没进展就该更新或删
 # inbox.md 的积压阈值
 INBOX_STALE_DAYS = 14
 
+# 项目册 index.md 的「最近变更」上限。它是注入的项目册入口（≤2250 字符），
+# 不设上限就会无限长，最后只能靠调大 maxChars 止血。
+RECENT_CHANGES_MAX = 8
+
 # 索引里由程序维护的三张表。标题按前缀匹配，后面的括号说明可以随便改。
 # 顺序就是写进 index.md 的顺序。
 INDEX_SECTIONS = ("项目册", "playbooks", "topics")
@@ -108,7 +113,6 @@ INDEX_SECTIONS = ("项目册", "playbooks", "topics")
 # 2026-10-27 之前 UI 里手抄了一份（afterMinutes 写 240，真实配置是 180），
 # 两边对不上：页面显示 240，跑起来按 180 算。
 CONFIG_DEFAULTS = {
-    "version": 1,
     "schema": 3,
     "defaultAgent": "default",
     "inject": {"maxChars": 12000, "order": []},
@@ -173,8 +177,23 @@ def read(path: Path) -> str:
 
 
 def write(path: Path, text: str) -> None:
+    """原子写：先写同目录的临时文件，再 `os.replace` 换过去。
+
+    非原子写的后果不是「写坏一点」，是整个文件被截成半截——`index --write`
+    会整文件重写 `shared/index.md`，中途断一次索引就废了。
+    临时文件放同目录，是因为跨盘 `os.replace` 不保证原子。
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8", newline="\n")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8", newline="\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def parse_frontmatter(path: Path) -> dict:
@@ -886,6 +905,30 @@ def clip(text: str, n: int) -> str:
     return text if len(text) <= n else text[:n] + "…"
 
 
+def column_width(cells: list[str], floor: int = 12, cap: int = 40) -> int:
+    """列表的第一列宽度：按实际内容算，别写死。
+
+    写死 28 的后果是长路径把整张表撑歪，而表格是给人扫的，一歪就看不清哪行
+    对应哪个文件。上限 40 是为了防止一个超长路径把摘要挤到屏幕外。
+    """
+    longest = max((len(c) for c in cells), default=0)
+    return min(max(longest + 2, floor), cap)
+
+
+def count_recent_changes(text: str) -> int:
+    """数「## 最近变更」下面有几条 `- `，到下一个 `## ` 为止。"""
+    n = 0
+    inside = False
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("## "):
+            inside = "最近变更" in s
+            continue
+        if inside and s.startswith("- "):
+            n += 1
+    return n
+
+
 # ---------------------------------------------------------------- 命令：status
 
 def agent_log_spot(root: Path, agent: str) -> tuple[str, int, str]:
@@ -930,17 +973,19 @@ def cmd_status(root: Path) -> int:
 
     books = list_playbooks(root)
     print(f"\nplaybooks {len(books)} 个（跨项目方法论）：")
+    w1 = column_width([b["display"] for b in books])
     for b in books:
         flag = "" if all(b[k] for k in REQUIRED_FIELDS) else "  [字段不全]"
-        print(f"  {b['display']:<28} {b['summary'] or '（无 summary）'}{flag}")
+        print(f"  {b['display']:<{w1}} {b['summary'] or '（无 summary）'}{flag}")
     if not books:
         print("  （无）")
 
     topics = list_topics(root)
     print(f"\ntopics {len(topics)} 个（单文件主题）：")
+    w2 = column_width([t["display"] for t in topics])
     for t in topics:
         flag = "" if all(t[k] for k in REQUIRED_FIELDS) else "  [字段不全]"
-        print(f"  {t['display']:<28} {t['summary'] or '（无 summary）'}{flag}")
+        print(f"  {t['display']:<{w2}} {t['summary'] or '（无 summary）'}{flag}")
     if not topics:
         print("  （无）")
 
@@ -1140,13 +1185,19 @@ def check_stale(root: Path) -> list[dict]:
 
     access = {}
     # 戳记按 agent 拆成了 access-<agent>.json，全读进来合并。
+    # 只认 access-*.json：`access.json` 是 2026-10-26 之前的单文件版本，按字母序
+    # 排在 access-* 之后，原来的 dict.update 会把新戳记覆盖成旧值。
+    # 合并时取每个路径上最新的日期，不靠读取顺序——顺序无关才不会错。
     state_dir = root / ".state"
     if state_dir.is_dir():
-        for sp in sorted(state_dir.glob("access*.json")):
+        for sp in sorted(state_dir.glob("access-*.json")):
             try:
-                access.update(json.loads(read(sp)).get("files", {}))
+                files = json.loads(read(sp)).get("files", {})
             except Exception:
                 continue
+            for rel, stamp in files.items():
+                if isinstance(stamp, str) and stamp > access.get(rel, ""):
+                    access[rel] = stamp
 
     candidates = list_playbooks(root) + list_topics(root)
     candidates += [scan_md(f, root) for f in list_md(root / "shared" / "user")]
@@ -1305,6 +1356,21 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
                 "确认还做不做；不做就把 status 改成「搁置」，别直接删",
             ))
 
+        # 「最近变更」没有条数上限，而它是注入的项目册入口（≤2250 字符）——
+        # 无限长等于每会话多付一笔预算，最后还是要靠调大 maxChars 止血。
+        idx = p["book"] / "index.md"
+        if idx.is_file():
+            try:
+                n_recent = count_recent_changes(read(idx))
+            except OSError:
+                n_recent = 0
+            if n_recent > RECENT_CHANGES_MAX:
+                problems.append((
+                    3, f"项目册 {label}",
+                    f"index.md「最近变更」{n_recent} 条，超过 {RECENT_CHANGES_MAX}",
+                    "压到最近几条，更早的合并成一行「更早见 git log」",
+                ))
+
     # 3. focus / inbox：两个兜底组件的腐烂检查
     focus_path = root / "shared" / "focus.md"
     if focus_path.is_file():
@@ -1330,6 +1396,23 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
                     f"{gap} 天没进展：{clip(body, 24)}",
                     "更新状态或删掉。「进行中」不等于在推进",
                 ))
+
+        # 不变量：焦点里的项目，status 必须是「进行中」。
+        # 条目是自由文本，只能拿 id / title 做子串匹配——匹配不上就不报。
+        # 漏报的代价是这条检查偶尔失效；误报的代价是每次体检都有一条假问题，
+        # 然后人就学会无视体检了。
+        for p in projects:
+            if p["state"] != "ok" or p["status"] in ("", "进行中"):
+                continue
+            needles = [n for n in (p["id"], p["title"]) if n]
+            for body, _day in fitems:
+                if any(n in body for n in needles):
+                    problems.append((
+                        2, "focus",
+                        f"提到「{p['title'] or p['id']}」，但它的 status 是「{p['status']}」",
+                        "焦点只放进行中的：要么把 status 改回来，要么从 focus 删掉",
+                    ))
+                    break
 
     inbox_path = root / "shared" / "inbox.md"
     if inbox_path.is_file():
@@ -1361,6 +1444,40 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
                     2, "shared",
                     f"总索引的{section}表和实际状态不一致",
                     "跑 `index --write` 同步",
+                ))
+
+    # 5. 配置自身的自洽性。`sync` / `schema` 曾经是零消费者字段——写了没人读，
+    #    等于给了个假承诺：`sync.enabled: true` 会让人以为同步真的开着。
+    config_path = root / "config.json"
+    if config_path.is_file():
+        cfg = {}
+        try:
+            cfg = json.loads(read(config_path))
+        except Exception as exc:
+            problems.append((
+                1, "config.json", f"解析失败：{exc}",
+                "修好 JSON。坏掉的配置会让所有阈值静默退回默认值",
+            ))
+        if cfg:
+            want = CONFIG_DEFAULTS.get("schema")
+            if cfg.get("schema") != want:
+                problems.append((
+                    2, "config.json",
+                    f"schema={cfg.get('schema')!r}，代码期望 {want}",
+                    "配置结构变了。对照 `memory.py init` 生成的默认值补字段，别手抄",
+                ))
+            if (cfg.get("sync") or {}).get("enabled"):
+                problems.append((
+                    2, "config.json",
+                    "sync.enabled=true，但同步功能还没实现",
+                    "改回 false。现在开它只是给未来的自己一个假承诺",
+                ))
+            unknown = sorted(set(cfg) - set(CONFIG_DEFAULTS))
+            if unknown:
+                problems.append((
+                    3, "config.json",
+                    f"有代码不认识的键：{'、'.join(unknown)}",
+                    "删掉，或把它接进 CONFIG_DEFAULTS——不接就是下一个死字段",
                 ))
 
     problems.sort(key=lambda x: x[0])

@@ -31,6 +31,7 @@ import json
 import os
 import re
 import sys
+import traceback
 from datetime import date, datetime
 from pathlib import Path
 
@@ -303,12 +304,14 @@ def load(
     if project:
         section = load_project(project, min(PROJECT_INJECT_MAX, max(0, budget // 2)))
         parts.append(section)
-        remaining -= len(section)
+        # 必须 clamp：不 clamp 的话 remaining 会变负，后面「remaining > 300 就截断」
+        # 这条分支永远进不去，所有条目直接判丢弃——一次小预算就把记忆全丢了。
+        remaining = max(0, remaining - len(section))
 
         log_section = load_project_log(project, agent, 18)
         if log_section:
             parts.append(log_section)
-            remaining -= len(log_section)
+            remaining = max(0, remaining - len(log_section))
 
     for item in items:
         header = f"\n### {item['title']}\n\n"
@@ -359,10 +362,15 @@ def load(
     head += (
         "\n"
         f"总册根：{root}    本项目册根：{project or '（无，本工作区未建项目册）'}\n"
-        f"日志写这里：{(project / 'log' / agent) if project else (root / 'agents' / agent / 'log')}\n"
+        f"日志写这里：{(project / 'log' / agent) if project else (root / 'log' / agent)}\n"
         "保存：把结论写进项目册对应文件 → 项目 log 追加 `提炼：...` → 更新 index.md\n"
         "没写就等于这次结论只存在于对话里，下次会话读不到。\n"
     )
+    if not project:
+        head += (
+            "本工作区还没有项目册。如果这里会长期干活（不只是临时看个文件），"
+            "跑 `/memory-init` 建册：它会先问你三个问题，不会静默建。\n"
+        )
 
     tail = "\n</memory-context>\n"
     notes = []
@@ -471,4 +479,14 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    try:
+        sys.exit(main(sys.argv))
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001
+        # 渲染器崩了不能阻塞会话，但也不能静默：stderr 留痕，退出码给 0。
+        # 没有这层保护时，任何一处 int()/路径异常都会让 hook 非零退出——
+        # 会话照开，但这次一条记忆都没有，而且没人知道。
+        log(f"渲染器异常，本次不注入：{type(exc).__name__}: {exc}")
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(0)
