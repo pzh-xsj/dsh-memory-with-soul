@@ -12,6 +12,8 @@
  * 跑法：`node adapters/dsh/web.test.mjs`
  */
 import { spawn } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -151,10 +153,24 @@ check('不存在的文件 → 404', missingFile.status === 404, `${missingFile.s
 const escape = await get('file', `?path=${encodeURIComponent('../../../../etc/passwd')}`)
 check('越界路径被拒', escape.status === 400 || escape.status === 404, String(escape.status))
 
+// 0.6.3 起人格写在角色卡上：临时造一张卡 + 一条映射，收尾还原——真库不该留自检垃圾
+const MEM_ROOT = process.env.MEMORY_DIR ?? join(homedir(), '.memory')
+const CFG_FILE = join(MEM_ROOT, 'config.json')
+const CFG_ORIG = existsSync(CFG_FILE) ? readFileSync(CFG_FILE, 'utf8') : null
+const WIRE_ROLE = 'zz-wire'
+const WIRE_DIR = join(MEM_ROOT, 'roles', WIRE_ROLE)
+mkdirSync(WIRE_DIR, { recursive: true })
+writeFileSync(join(WIRE_DIR, 'SOUL.md'), '---\nname: 线测\n---\n\n# SOUL.md\n\n原文\n')
+{
+  const cfg = CFG_ORIG === null ? {} : JSON.parse(CFG_ORIG)
+  cfg.roles = { ...(cfg.roles ?? {}), [WIRE_ROLE]: WIRE_ROLE }
+  writeFileSync(CFG_FILE, JSON.stringify(cfg, null, 2) + '\n')
+}
+
 // 写接口的冲突检测（SOUL 用过期 mtime）
 const soul = await routes.get(`${API_PREFIX}/soul`).fetch(new Request(`http://127.0.0.1:1${API_PREFIX}/soul`, {
   method: 'POST',
-  body: JSON.stringify({ agent: 'moxie-dsh', text: 'x', mtime: 1 }),
+  body: JSON.stringify({ agent: WIRE_ROLE, text: 'x', mtime: 1 }),
 }))
 check('SOUL 过期 mtime → 409', soul.status === 409, String(soul.status))
 
@@ -166,7 +182,7 @@ const post = async (key, payload) => {
   return { status: res.status, body: await res.json() }
 }
 
-const persona = await post('persona', { agent: 'moxie-dsh', file: 'SOUL.md', text: 'x', mtime: 1 })
+const persona = await post('persona', { agent: WIRE_ROLE, file: 'SOUL.md', text: 'x', mtime: 1 })
 check('persona 过期 mtime → 409', persona.status === 409, String(persona.status))
 
 // 一键修与顺序：POST 挂在同一条路由上，写通道只认白名单动作
@@ -177,11 +193,15 @@ const orderPaths = (config.body.config?.inject?.order ?? []).map((e) => e.path)
 const orderShort = await post('config', { order: orderPaths.slice(0, -1) })
 check('顺序少一条 → 400', orderShort.status === 400, `${orderShort.status}`)
 
-const personaBad = await post('persona', { agent: 'moxie-dsh', file: '../../config.json', text: 'x' })
+const personaBad = await post('persona', { agent: WIRE_ROLE, file: '../../config.json', text: 'x' })
 check('persona 只认 SOUL.md', personaBad.status === 400, `${personaBad.status} ${personaBad.body.error ?? ''}`)
 
-const personaOld = await post('persona', { agent: 'moxie-dsh', file: 'IDENTITY.md', text: 'x' })
+const personaOld = await post('persona', { agent: WIRE_ROLE, file: 'IDENTITY.md', text: 'x' })
 check('persona 拒收已退役的 IDENTITY.md', personaOld.status === 400, `${personaOld.status}`)
+
+// 没配角色的 agent 一律拒写（404）：静默写回旧路径会让迁移看起来没做
+const personaNoRole = await post('persona', { agent: 'zz-norole', file: 'SOUL.md', text: 'x' })
+check('没配角色的 agent 拒写人格', personaNoRole.status === 404, `${personaNoRole.status}`)
 
 const fileStale = await post('file', { path: 'shared/focus.md', text: 'x', mtime: 1 })
 check('file 过期 mtime → 409', fileStale.status === 409, String(fileStale.status))
@@ -220,6 +240,11 @@ check('file 声明 GET,POST', String(routes.get(`${API_PREFIX}/file`).methods) =
 check('playbook 声明 GET,POST', String(routes.get(`${API_PREFIX}/playbook`).methods) === 'GET,POST', String(routes.get(`${API_PREFIX}/playbook`).methods))
 check('persona 只声明 POST', String(routes.get(`${API_PREFIX}/persona`).methods) === 'POST')
 check('全部路由都带 requestBody', [...routes.values()].every((r) => r.requestBody === 'buffered'))
+
+// 角色卡 fixture 收尾：还原 config、删掉临时卡
+rmSync(WIRE_DIR, { recursive: true, force: true })
+if (CFG_ORIG === null) rmSync(CFG_FILE, { force: true })
+else writeFileSync(CFG_FILE, CFG_ORIG)
 
 const failed = results.filter((r) => !r.ok)
 console.log(`\n${results.length - failed.length}/${results.length} 通过`)

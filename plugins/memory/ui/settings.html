@@ -209,11 +209,15 @@
       <label>Agent</label>
       <select id="agentSelect"><option value="">（未加载）</option></select>
     </div>
-    <p class="hint">只有 <code>SOUL.md</code> 一个文件：身份与称呼已经并进来。两行字段是机器读的（宿主与插件按 <code>name:</code> 取值），下面的小节是正文。保存时写整份文件，写前备份到 <code>.state/ui-backups</code>。</p>
+    <div class="row">
+      <label>角色</label>
+      <div id="roleInfo" class="mono" style="padding:7px 0;color:var(--muted)">—</div>
+    </div>
+    <p class="hint">人格跟着<b>角色</b>走：这里读写 <code>roles/&lt;role&gt;/SOUL.md</code>。哪个 agent 用哪张卡写在 <code>config.json</code> 的 <code>roles</code> 里（不在这里改，映射要改一次动全局）。两行字段是机器读的（宿主与插件按 <code>name:</code> 取值），下面的小节是正文。保存时写整份文件，写前备份到 <code>.state/ui-backups</code>。</p>
   </div>
 
   <div class="card">
-    <h2>人格 <span class="sub">SOUL.md · 我是谁，以及怎么说话</span></h2>
+    <h2>人格 <span class="sub" id="soulSub">角色卡 · 我是谁，以及怎么说话</span></h2>
     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px">
       <div class="row"><label for="soulName">name · 名字</label><input type="text" id="soulName" placeholder="摩羯" disabled></div>
       <div class="row"><label for="soulIdentity">identity · 身份</label><input type="text" id="soulIdentity" placeholder="半个秘书，半个参谋" disabled></div>
@@ -1237,11 +1241,54 @@ async function loadAgentList() {
   sel.value = S.agent;
 }
 
+function roleOfAgent(agent) {
+  const map = (S.overview && S.overview.agentRoles) || {};
+  return (map[agent] || {}).role || "";
+}
+
+function renderRoleLine() {
+  const role = roleOfAgent(S.agent);
+  const list = (S.overview && S.overview.roles) || [];
+  const info = list.find((r) => r.role === role) || null;
+  const el = $("#roleInfo");
+  if (!S.agent) {
+    el.textContent = "先选 agent";
+    return;
+  }
+  if (!S.server) {
+    el.textContent = "本地目录模式：角色映射读不到，按旧路径 agents/<id>/SOUL.md 显示";
+    el.style.color = "var(--muted)";
+    $("#soulSub").textContent = "人格 · 本地目录模式";
+    return;
+  }
+  if (!role) {
+    el.textContent = "未配置：config.roles 里没有它，defaultRole 也空";
+    el.style.color = "var(--warn)";
+    $("#soulSub").textContent = "角色卡 · 还没配";
+    return;
+  }
+  const card = info && info.has_soul ? `roles/${role}/SOUL.md` : `roles/${role}/SOUL.md（缺文件）`;
+  el.textContent = `${role} → ${card}${info && info.name ? " · name: " + info.name : ""}`;
+  el.style.color = info && info.has_soul ? "var(--fg)" : "var(--warn)";
+  $("#soulSub").textContent = `角色卡 ${role} · 我是谁，以及怎么说话`;
+}
+
 async function loadSoul() {
   const box = $("#soulEditor");
-  const path = S.agent ? `agents/${S.agent}/SOUL.md` : "";
+  if (S.server && !S.overview) await loadOverview();
+  renderRoleLine();
+  const role = roleOfAgent(S.agent);
+  let path = role ? `roles/${role}/SOUL.md` : "";
+  // 本地目录模式看不到 config.json 里的映射，退回旧路径；服务端模式不退回，
+  // 否则「没配角色」会被悄悄读成人格还在
+  if (!path && !S.server && S.agent) path = `agents/${S.agent}/SOUL.md`;
   if (!path) {
-    box.replaceChildren(h("p", { class: "empty", text: "没有可编辑的 agent" }));
+    S.soul = null;
+    box.replaceChildren(h("p", {
+      class: "empty",
+      text: `${S.agent || "这个 agent"} 还没配角色卡：跑 memory.py roles --migrate，或在 config.json 的 roles 里给它指定一张卡`,
+    }));
+    refreshButtons();
     return;
   }
   box.replaceChildren(h("p", { class: "empty", text: "加载中…" }));
@@ -1259,7 +1306,10 @@ async function loadSoul() {
     }
     const parsed = parseSoul(text);
     const fields = parseSoulFields(parsed.head);
-    S.soul = { head: parsed.head, fields, sections: parsed.sections, raw: text, mtime, path };
+    S.soul = {
+      head: parsed.head, fields, sections: parsed.sections, raw: text, mtime, path,
+      role: role || (S.server ? "" : "legacy-local"),
+    };
     for (const [id, key] of SOUL_FIELDS) {
       const el = $("#" + id);
       el.value = fields[key];
@@ -2036,7 +2086,7 @@ function refreshButtons() {
   const writable = S.server || !!S.handle;
   $("#memSave").disabled = !(hasFile && writable);
   $("#memRevert").disabled = !hasFile;
-  $("#soulSave").disabled = !(S.soul && S.soul.sections.length);
+  $("#soulSave").disabled = !(S.soul && S.soul.sections.length && S.soul.role);
   $("#soulReload").disabled = !S.agent;
   const userOk = !!(S.user && S.user.sections.length && writable);
   $("#userSave").disabled = !userOk;

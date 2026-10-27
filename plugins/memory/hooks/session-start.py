@@ -19,6 +19,8 @@ payload 里没有 agent 字段，同一 harness 换专家认不出来，只能�
     python session-start.py --dry      # 不读 stdin，直接打印（手动测试）
     python session-start.py --dry --cwd "D:\\某项目"   # 指定 cwd 测试项目册定位
 
+    python session-start.py --dry --agent moxie-dsh --role advisor   # 指定身份与角色卡
+    python session-start.py --dry --subagent            # 按子 agent 的卡渲染（roles.subagent）
 环境变量：
     MEMORY_DIR      记忆库路径，默认 ~/.memory
     MEMORY_AGENT    完整覆盖 agent id（逃生口，必须符合 [a-z0-9-]）
@@ -38,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _state import (
+    AGENT_RE,
     detect_harness,
     find_project_book,
     find_root,
@@ -47,6 +50,8 @@ from _state import (
     recent_logs,
     remember_session,
     resolve_agent,
+    resolve_role,
+    role_card,
     touch_access,
     unextracted,
     write_state,
@@ -200,6 +205,7 @@ def load(
     warnings: list[str],
     harness: str,
     project_kind: str = "",
+    role: str = "",
 ) -> tuple[str, list[str]]:
     inject = config.get("inject", {})
     budget = int(inject.get("maxChars", 12000))
@@ -217,16 +223,31 @@ def load(
         # 依赖 kind 的条目：没 kind 就不查文件，免得拼出 shared/playbooks//method.md
         if "{kind}" in raw_path and not kind:
             continue
-        path = raw_path.format(agent=agent, today=today, kind=kind)
+        # 角色卡条目：没配角色就跳过，别拼出 roles//SOUL.md
+        if "{role}" in raw_path and not role:
+            continue
+        path = raw_path.format(agent=agent, role=role, today=today, kind=kind)
         if "{" in path:
             # 配置里写了渲染器不认识的占位符。跳过，别拼出奇怪路径
             continue
         full = root / path
+        # 迁移期兼容读：角色卡还没建时回退到旧位置 agents/<id>/SOUL.md。
+        # 只保留一个版本——两处都能读会长期掩盖「迁移没做」。
+        legacy_read = False
+        if not full.is_file() and role and path == f"roles/{role}/SOUL.md":
+            legacy = root / "agents" / agent / "SOUL.md"
+            if legacy.is_file():
+                full = legacy
+                legacy_read = True
         if not full.is_file():
             # 必需文件缺失必须说出来。原来直接 continue，结果是静默注入空人格
             if entry.get("required"):
                 missing.append(path)
             continue
+        if legacy_read:
+            warnings.append(
+                f"人格读的是旧位置 agents/{agent}/SOUL.md；跑 `memory.py roles --migrate` 收口"
+            )
         text = read_text(full)
         if not text.strip():
             if entry.get("required"):
@@ -397,13 +418,24 @@ def main(argv: list[str]) -> int:
         except Exception as exc:
             log(f"stdin 解析失败（继续执行）：{exc}")
 
-    # --cwd 只给手动测试用；正常路径从 payload / 环境变量里挑
+    # --cwd / --agent / --role 只给手动测试与适配器用；正常路径从 payload / 环境变量里挑
     forced = None
+    cli_agent = ""
+    cli_role = ""
+    subagent = "--subagent" in argv
     for i, arg in enumerate(argv):
         if arg == "--cwd" and i + 1 < len(argv):
             forced = argv[i + 1]
         elif arg.startswith("--cwd="):
             forced = arg.split("=", 1)[1]
+        elif arg == "--agent" and i + 1 < len(argv):
+            cli_agent = argv[i + 1].strip().lower()
+        elif arg.startswith("--agent="):
+            cli_agent = arg.split("=", 1)[1].strip().lower()
+        elif arg == "--role" and i + 1 < len(argv):
+            cli_role = argv[i + 1].strip()
+        elif arg.startswith("--role="):
+            cli_role = arg.split("=", 1)[1].strip()
 
     root = find_root()
     if not root.is_dir():
@@ -422,13 +454,31 @@ def main(argv: list[str]) -> int:
     harness, harness_src = detect_harness(payload)
 
     warnings = []
+    if cli_agent:
+        if AGENT_RE.match(cli_agent):
+            agent, agent_src = cli_agent, "--agent"
+        else:
+            warnings.append(f"--agent 不合法（{cli_agent}），已忽略")
     if agent_src == "env.MEMORY_AGENT":
         warnings.append(f"MEMORY_AGENT 覆盖生效，本次身份是 {agent}（不是自动解析的）")
     if harness == "unknown":
         warnings.append(f"识别不出 harness，agent 定为 {agent}；确认没在别的环境里跑")
 
-    if not (root / "agents" / agent).is_dir():
-        warnings.append(f"agent 目录不存在：agents/{agent}（跑 `memory.py init --agent {agent}` 建）")
+    # 角色：子 agent 查保留键 roles["subagent"]，普通会话查 roles[agent]
+    role_agent = "subagent" if subagent else agent
+    role, role_src = resolve_role(root, role_agent, config, cli_role)
+    if subagent and role_src != "config.roles.subagent":
+        warnings.append(
+            "子 agent 没有单独配角色（roles.subagent），" + (f"沿用角色 {role}" if role else "且没有任何角色卡")
+        )
+
+    if not role and not (root / "agents" / agent / "SOUL.md").is_file():
+        warnings.append(
+            f"没有可注入的人格：没配角色卡，也没有 agents/{agent}/SOUL.md"
+            "（跑 `memory.py roles --migrate` 或手写 roles/<role>/SOUL.md）"
+        )
+    if role and not role_card(root, role).is_file() and not (root / "agents" / agent / "SOUL.md").is_file():
+        warnings.append(f"角色卡不存在：roles/{role}/SOUL.md（这次人格是空的）")
 
     if forced:
         cwd, cwd_src = forced, "--cwd"
@@ -444,7 +494,8 @@ def main(argv: list[str]) -> int:
             project_kind = ""
     log(
         f"agent={agent}（{agent_src}）harness={harness}（{harness_src}）"
-        f"cwd={cwd} 项目册={project or '无'} kind={project_kind or '无'}"
+        f"role={role or '无'}（{role_src}）cwd={cwd} "
+        f"项目册={project or '无'} kind={project_kind or '无'}"
     )
 
     # 会话 → agent 映射：post-read 的 payload 里没有 transcript_path，只能查这张表
@@ -462,6 +513,9 @@ def main(argv: list[str]) -> int:
         "cwd_source": cwd_src,
         "project": str(project) if project else None,
         "project_kind": project_kind,
+        "role": role,
+        "role_source": role_src,
+        "subagent": subagent,
         "payload_keys": sorted(payload),
         "payload_client": payload.get("client"),
         "payload_agent_type": payload.get("agent_type"),
@@ -472,7 +526,7 @@ def main(argv: list[str]) -> int:
     if warn:
         warnings.insert(0, warn)
 
-    output, injected = load(root, agent, config, project, warnings, harness, project_kind)
+    output, injected = load(root, agent, config, project, warnings, harness, project_kind, role=role)
     sys.stdout.write(output)
     touch_access(root, injected, agent)
     return 0

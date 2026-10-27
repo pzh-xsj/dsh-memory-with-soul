@@ -207,6 +207,20 @@ def view_overview(root: Path, agent: str | None = None, cwd: str | None = None) 
     except Exception as exc:  # 渲染器坏了不能让整页白屏
         injected = {"error": f"{type(exc).__name__}: {exc}"}
 
+    # 角色卡：把「每个 agent 读哪张卡」一次算好，前端不再自己解析
+    agent_roles = {}
+    if getattr(mem, "resolve_role", None) is not None:
+        for name in names:
+            try:
+                r, rsrc = mem.resolve_role(root, name)
+            except Exception:
+                r, rsrc = "", "none"
+            agent_roles[name] = {"role": r, "source": rsrc}
+    mine = agent_roles.get(agent) or {"role": "", "source": "none"}
+    agent_role, agent_role_src = mine["role"], mine["source"]
+    roles = mem.list_roles(root, cfg) if getattr(mem, "list_roles", None) else []
+    default_role = mem.default_role(root, cfg) if getattr(mem, "default_role", None) else ""
+
     dirty = mem.run_git(root, "status", "--porcelain")
     return {
         "root": root.as_posix(),
@@ -236,6 +250,11 @@ def view_overview(root: Path, agent: str | None = None, cwd: str | None = None) 
         },
         "kinds": sorted(mem.playbook_kinds(root)),
         "statusValues": list(mem.EDITABLE_STATUS),
+        "roles": roles,
+        "agentRole": agent_role,
+        "agentRoleSource": agent_role_src,
+        "agentRoles": agent_roles,
+        "defaultRole": default_role,
     }
 
 
@@ -325,22 +344,33 @@ AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 PERSONA_FILES = ("SOUL.md",)
 
 
-def persona_path(root: Path, agent: str, file: str = "SOUL.md") -> Path:
-    """人格文件路径。agent 和 file 必须各过一道白名单。
-
-    两个白名单缺一不可：只校验 agent 时，`file` 传 `../../config.json`
-    就能写到库外面去；只校验 file 时，agent 名里的 `..` 同理。
-    """
+def role_of_agent(root: Path, agent: str) -> tuple[str, str]:
+    """agent → (角色, 来源)。没配角色就返回 ("", "none")。"""
     if not AGENT_ID_RE.match(agent or ""):
         raise ValueError("agent 名不合法")
+    resolve_role = getattr(mem, "resolve_role", None)
+    if resolve_role is None:
+        raise ValueError("这个版本没有角色卡支持")
+    return resolve_role(root, agent)
+
+
+def persona_path(root: Path, role: str, file: str = "SOUL.md") -> Path:
+    """角色卡路径。role 和 file 必须各过一道白名单。
+
+    两个白名单缺一不可：只校验 role 时，`file` 传 `../../config.json`
+    就能写到库外面去；只校验 file 时，role 名里的 `..` 同理。
+    """
+    role_re = getattr(mem, "ROLE_RE", None)
+    if role_re is None or not role_re.match(role or ""):
+        raise ValueError("角色名不合法")
     if file not in PERSONA_FILES:
         raise ValueError(f"只能写 {' / '.join(PERSONA_FILES)}")
-    folder = (root / "agents" / agent).resolve()
+    folder = (root / "roles" / role).resolve()
     if root not in folder.parents or not folder.is_dir():
-        raise FileNotFoundError(f"没有 agents/{agent}")
+        raise FileNotFoundError(f"没有 roles/{role}")
     p = folder / file
     if not p.is_file():
-        raise FileNotFoundError(f"agents/{agent}/{file} 不存在")
+        raise FileNotFoundError(f"roles/{role}/{file} 不存在")
     return p
 
 
@@ -357,8 +387,18 @@ def _check_mtime(p: Path, expect_mtime) -> None:
 
 
 def write_persona(root: Path, agent: str, file: str, text: str, expect_mtime) -> dict:
-    """整份人格文件覆盖写。分段逻辑在前端，服务端只管「原件没被别人改过」。"""
-    p = persona_path(root, agent, file)
+    """整份人格文件覆盖写。分段逻辑在前端，服务端只管「原件没被别人改过」。
+
+    0.6.3 起写的是角色卡 `roles/<role>/SOUL.md`：人格跟着角色走，不再跟着
+    agent 目录走。没配角色就拒绝——静默写回旧路径会让迁移看起来没做。
+    """
+    role, role_src = role_of_agent(root, agent)
+    if not role:
+        raise mem.MetaError(
+            "missing",
+            f"{agent} 还没配角色卡（config.roles 里没有它，defaultRole 也空）",
+        )
+    p = persona_path(root, role, file)
     if not isinstance(text, str):
         raise ValueError("text 要是字符串")
     if len(text) > 400000:
@@ -366,7 +406,8 @@ def write_persona(root: Path, agent: str, file: str, text: str, expect_mtime) ->
     _check_mtime(p, expect_mtime)
     backup(p, root)
     mem.write(p, text)
-    return {"agent": agent, "path": f"agents/{agent}/{file}",
+    return {"agent": agent, "role": role, "roleSource": role_src,
+            "path": f"roles/{role}/{file}",
             "bytes": len(text.encode("utf-8")), "mtime": p.stat().st_mtime}
 
 
@@ -733,19 +774,42 @@ def self_test(root: Path) -> int:
         # 3b. 两条写入通道的成功路径：只验拒绝不验成功，等于没验过真能写
         bdir = root / ".state" / "ui-backups"
         backups_before = set(bdir.glob("*.bak")) if bdir.is_dir() else set()
+        # 人格自 0.6.3 起写在角色卡上：临时造一张卡 + 一条临时映射，测完还原 config
+        cfg_p = root / "config.json"
+        cfg_orig = cfg_p.read_text(encoding="utf-8") if cfg_p.is_file() else None
         tmp_agent = root / "agents" / "zz-selftest"
+        tmp_role = root / "roles" / "zz-selftest"
         tmp_md = root / "shared" / "zz-selftest.md"
+
+        def _set_roles(mapping):
+            cfg_now = json.loads(cfg_p.read_text(encoding="utf-8")) if cfg_p.is_file() else {}
+            cfg_now["roles"] = {} if mapping is None else {**(cfg_now.get("roles") or {}), **mapping}
+            cfg_p.write_text(
+                json.dumps(cfg_now, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8")
+
         try:
             tmp_agent.mkdir(parents=True, exist_ok=True)
-            soul = tmp_agent / "SOUL.md"
+            tmp_role.mkdir(parents=True, exist_ok=True)
+            soul = tmp_role / "SOUL.md"
             soul.write_text("---\nname: 自检\n---\n\n# SOUL.md\n\n原文\n", encoding="utf-8")
+            _set_roles({"zz-selftest": "zz-selftest"})
             code, data = _post(f"{base}/api/persona", {
                 "agent": "zz-selftest", "file": "SOUL.md",
                 "text": "---\nname: 自检改\n---\n\n# SOUL.md\n\n原文\n",
                 "mtime": soul.stat().st_mtime})
-            check("POST /api/persona 正常保存",
-                  code == 200 and "自检改" in soul.read_text(encoding="utf-8"),
-                  f"{code} {data.get('error', '')}")
+            check("POST /api/persona 写的是角色卡（roles/<role>/SOUL.md）",
+                  code == 200 and "自检改" in soul.read_text(encoding="utf-8")
+                  and data.get("path") == "roles/zz-selftest/SOUL.md"
+                  and data.get("role") == "zz-selftest",
+                  f"{code} {data.get('path') or data.get('error', '')}")
+
+            # 没配角色的 agent 一律拒写：静默写回旧路径会让迁移看起来没做
+            _set_roles(None)
+            code, _ = _post(f"{base}/api/persona", {
+                "agent": "zz-selftest", "file": "SOUL.md", "text": "x"})
+            check("没配角色的 agent 拒写人格", code == 404, f"{code}")
+            _set_roles({"zz-selftest": "zz-selftest"})
 
             # IDENTITY.md 已退役：还能写它说明 PERSONA_FILES 没收窄
             code, _ = _post(f"{base}/api/persona", {
@@ -765,6 +829,11 @@ def self_test(root: Path) -> int:
                   f"{len(backups_after - backups_before)} 份")
         finally:
             shutil.rmtree(tmp_agent, ignore_errors=True)
+            shutil.rmtree(tmp_role, ignore_errors=True)
+            if cfg_orig is not None:
+                cfg_p.write_text(cfg_orig, encoding="utf-8")
+            else:
+                cfg_p.unlink(missing_ok=True)
             tmp_md.unlink(missing_ok=True)
             for p in (set(bdir.glob("*.bak")) if bdir.is_dir() else set()) - backups_before:
                 p.unlink(missing_ok=True)

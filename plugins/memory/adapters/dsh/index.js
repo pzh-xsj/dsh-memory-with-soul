@@ -241,7 +241,7 @@ async function run(ctx, cfg, script, args, options = {}) {
   }
 }
 
-async function render(ctx, cfg, cwd) {
+async function render(ctx, cfg, cwd, subagent = false) {
   const candidates = rendererCandidates(cfg)
   const renderer = candidates.find((path) => existsSync(path))
   if (renderer === undefined) {
@@ -249,7 +249,9 @@ async function render(ctx, cfg, cwd) {
     return null
   }
 
-  const result = await run(ctx, cfg, renderer, ['--dry', '--cwd', cwd])
+  // 子 agent 让渲染器去查 roles["subagent"]：人格按角色取，日志仍记在父 agent 名下
+  const args = subagent ? ['--dry', '--subagent', '--cwd', cwd] : ['--dry', '--cwd', cwd]
+  const result = await run(ctx, cfg, renderer, args)
   if (result === null) return null
   if (result.stderr.trim() !== '') ctx.logger.info(`memory-inject: 渲染器 stderr: ${result.stderr.trim()}`)
   if (result.code !== 0) {
@@ -392,7 +394,7 @@ async function injectMemory(ctx, cfg, agent, done) {
 
   const header = agent.session?.header ?? {}
   const cwd = typeof header.cwd === 'string' && header.cwd !== '' ? header.cwd : process.cwd()
-  const text = await render(ctx, cfg, cwd)
+  const text = await render(ctx, cfg, cwd, isSubagent(agent))
   if (text === null) return
 
   // 必须 await：inject 的失败可能以 rejected promise 的形式逃出同步 try/catch。

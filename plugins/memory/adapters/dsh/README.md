@@ -20,7 +20,7 @@ Web 界面 → 左侧栏 **插件** → **添加插件** 旁的箭头 → **选�
 ```bash
 node smoke.mjs          # 17/17：清单、模块加载、v4 来源准入、渲染器四关、路由表、左侧栏
 node test.mjs           # 10/10：用假宿主验三条接线（注入 / track / digest）
-node web.test.mjs       # 44/44：内置设置页的十一条路由（入口层 + 真起 python 打每条路由）
+node web.test.mjs       # 45/45：内置设置页的十一条路由（入口层 + 真起 python 打每条路由）
 ```
 
 `test.mjs` 不启动 DSH，也不需要 python 真的跑完——`ctx.subprocess` 被换成记录器，只断言
@@ -53,13 +53,17 @@ node web.test.mjs       # 44/44：内置设置页的十一条路由（入口层 
 
 | 通道 | 端点 | 用途 |
 | --- | --- | --- |
-| 服务端 | `POST /api/persona`（只认 `SOUL.md` / `IDENTITY.md`） | 人格页三张卡（身份 / 称呼 / 人格）整份回写 |
+| 服务端 | `POST /api/persona`（只认 `SOUL.md`；0.6.3 起按角色写 `roles/<role>/SOUL.md`，agent 没配角色 → 404） | 人格页整份回写（`name` / `identity` + 分节正文） |
 | 服务端 | `POST /api/file`（只认 `.md`，不收 `.state` / `.git`） | 记忆页自由文本编辑 |
 | 浏览器目录授权 | File System Access API | 没连服务端时的兜底 |
 
 两条服务端通道都带 mtime 冲突检测，写前备份到 `.state/ui-backups/`。
 人格页按 `## ` 分节编辑：`SOUL.md` 是 原则 / 沟通（含 `### 提问`、`### 语气`）/ 禁区 / 记忆，
 `IDENTITY.md` 的 `## 称呼` 单拎成一张卡。节名是页面分卡片的依据，改名前先看 `parseSoul()`。
+
+## 子 agent
+
+注入对子 agent 也生效：`render()` 发现 `session.header.origin` 是 `subagent` / `subagent-deep` 时给渲染器加 `--subagent`，渲染器据此查 `config.roles["subagent"]`（没配就告警并沿用 `defaultRole`）；日志与戳记仍记在父 agent 名下。`injectSubagents` 默认 `false`——想给子 agent 注人格要显式打开。
 
 ## 身份
 

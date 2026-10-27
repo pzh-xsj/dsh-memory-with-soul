@@ -167,6 +167,96 @@ def state_name(agent: str, name: str) -> str:
     return f"{p.stem}-{agent}{p.suffix}"
 
 
+# ---------------------------------------------------------------- 角色卡
+#
+# 2026-10-27 起人格是「角色卡」：`roles/<role>/SOUL.md`。agent 只指向卡。
+# 为什么独立出来：agent id 带 harness 后缀（moxie-wb / moxie-dsh），人格原来
+# 长在 agents/<id>/ 里，于是同一个人在两台 harness 上是两份各自漂移的 SOUL.md。
+#
+# 放在 _state 而不是 core：渲染器（session-start）与 CLI 都要解析角色，
+# 而 core 反过来依赖本文件——放这里两边都能用，且只有一份实现。
+
+ROLE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+ROLE_DIR = "roles"
+ROLE_CARD = "SOUL.md"
+SUBAGENT_ROLE_KEY = "subagent"
+
+
+def role_card(root: Path, role: str) -> Path:
+    return root / ROLE_DIR / role / ROLE_CARD
+
+
+def _fm_field(text: str, key: str) -> str:
+    """从 frontmatter 原文里取一个键（只认单行 `key: value`）。"""
+    m = re.search(rf"^{re.escape(key)}:\s*(.*)$", text, re.M)
+    return m.group(1).strip() if m else ""
+
+
+def role_map(root: Path, cfg: dict | None = None) -> dict[str, str]:
+    """config 里的 agent → role 映射。只留合法条目，坏数据不影响注入。"""
+    raw = (cfg if cfg is not None else load_config(root)).get("roles") or {}
+    out: dict[str, str] = {}
+    if not isinstance(raw, dict):
+        return out
+    for agent, role in raw.items():
+        if isinstance(agent, str) and isinstance(role, str) and ROLE_RE.match(role):
+            out[agent.strip().lower()] = role
+    return out
+
+
+def default_role(root: Path, cfg: dict | None = None) -> str:
+    role = (cfg if cfg is not None else load_config(root)).get("defaultRole") or ""
+    return role.strip() if isinstance(role, str) and ROLE_RE.match(role.strip()) else ""
+
+
+def resolve_role(
+    root: Path,
+    agent: str,
+    cfg: dict | None = None,
+    override: str = "",
+) -> tuple[str, str]:
+    """解析 agent 该读哪张卡，返回 (role, 来源)。
+
+    优先级：`--role` 传参 → roles[agent] → 子 agent 的 roles["subagent"]
+    → defaultRole → 空（没有卡）。
+    """
+    cfg = cfg if cfg is not None else load_config(root)
+    if override and ROLE_RE.match(override):
+        return override, "cli"
+    roles = role_map(root, cfg)
+    if agent and agent in roles:
+        return roles[agent], "config.roles"
+    if agent == SUBAGENT_ROLE_KEY and SUBAGENT_ROLE_KEY in roles:
+        return roles[SUBAGENT_ROLE_KEY], "config.roles.subagent"
+    role = default_role(root, cfg)
+    if role:
+        return role, "config.defaultRole"
+    return "", "none"
+
+
+def list_roles(root: Path, cfg: dict | None = None) -> list[dict]:
+    """所有角色卡 + 谁在用它。config 里写了但目录没建的也列出来——那正是要修的状态。"""
+    cfg = cfg if cfg is not None else load_config(root)
+    roles = role_map(root, cfg)
+    folder = root / ROLE_DIR
+    names = sorted(p.name for p in folder.iterdir() if p.is_dir()) if folder.is_dir() else []
+    for role in roles.values():
+        if role not in names:
+            names.append(role)
+    out = []
+    for role in sorted(names):
+        card = role_card(root, role)
+        fm = card.read_text(encoding="utf-8") if card.is_file() else ""
+        out.append({
+            "role": role,
+            "has_soul": card.is_file(),
+            "name": _fm_field(fm, "name"),
+            "identity": _fm_field(fm, "identity"),
+            "agents": sorted(a for a, r in roles.items() if r == role),
+        })
+    return out
+
+
 def session_key(session_id: str) -> str:
     s = SESSION_RE.sub("_", str(session_id or ""))[:80]
     return s or "unknown"

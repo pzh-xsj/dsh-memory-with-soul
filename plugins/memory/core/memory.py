@@ -21,6 +21,9 @@
     python memory.py track --paths <文件>  把读过的记忆文件戳成今天（DSH 的 PostToolUse 调）
     python memory.py skills [--install] [--mode copy|link]
                                          把插件自带的 skill 装进 ~/.dsh/skills/
+    python memory.py roles               列角色卡（roles/<role>/SOUL.md）与每个 agent 读哪张
+    python memory.py roles --migrate [--dry] [--default-role <role>]
+                                         把 agents/<id>/SOUL.md 搬成角色卡并改写 config
     python memory.py init [路径]         初始化新库
     python memory.py init --agent <id> [--from <id>]        建一个 agent 的私有目录
     python memory.py init --project <路径> [--id <id>] [--title <标题>] [--kind <领域>]
@@ -60,9 +63,11 @@ if sys.platform == "win32":
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
 try:
     from _state import (
+        default_role,
         extraction_state,
         find_project_book,
         last_write_ms,
+        list_roles,
         load_config,
         log,
         log_dir_for,
@@ -70,16 +75,21 @@ try:
         read_text,
         relative_to_root,
         resolve_agent,
+        resolve_role,
+        role_card,
+        role_map,
         session_agent,
         state_name,
         touch_access,
         unextracted,
         write_state,
     )
-except Exception:  # 单独拷走 core/ 时仍能跑，只是少了提炼检查
+except Exception:  # 单独拷走 core/ 时仍能跑，只是少了提炼检查与角色卡
+    default_role = None
     extraction_state = None
     find_project_book = None
     last_write_ms = None
+    list_roles = None
     load_config = None
     log = None
     log_dir_for = None
@@ -87,6 +97,9 @@ except Exception:  # 单独拷走 core/ 时仍能跑，只是少了提炼检查
     read_text = None
     relative_to_root = None
     resolve_agent = None
+    resolve_role = None
+    role_card = None
+    role_map = None
     session_agent = None
     state_name = None
     touch_access = None
@@ -142,8 +155,13 @@ INDEX_SECTIONS = ("项目册", "playbooks", "topics")
 # 2026-10-27 之前 UI 里手抄了一份（afterMinutes 写 240，真实配置是 180），
 # 两边对不上：页面显示 240，跑起来按 180 算。
 CONFIG_DEFAULTS = {
-    "schema": 3,
+    # 4 = 人格从 agents/<id>/SOUL.md 搬到 roles/<role>/SOUL.md（角色卡）。
+    # 未知键会被 checkup 点名、被 config_drop_unknown 一键修删掉——所以 roles /
+    # defaultRole 必须登记在这张表里，否则用户刚加的角色映射会被自己修没。
+    "schema": 4,
     "defaultAgent": "default",
+    "defaultRole": "",
+    "roles": {},
     "inject": {"maxChars": 12000, "order": []},
     "digest": {
         "enabled": True,
@@ -212,8 +230,211 @@ def list_agents(root: Path) -> list[str]:
     return out
 
 
+# ---------------------------------------------------------------- 角色卡
+#
+# 2026-10-27 起人格是「角色卡」：`roles/<role>/SOUL.md`。agent 只指向卡，不再
+# 自带一份人格——同一个 agent 换卡就换人，同一张卡被两个 agent 用就是同一个人。
+#
+# 解析逻辑在 hooks/_state.py（渲染器和 CLI 都要用，而 core 反过来依赖它），
+# 这里只放常量、配置读取和迁移命令，避免同一套规则写两遍各自漂移。
+
+ROLE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+ROLE_DIR = "roles"
+ROLE_CARD = "SOUL.md"
+
+# 子 agent 没有自己的 agent id，用这个保留键查卡。
+SUBAGENT_ROLE_KEY = "subagent"
+
+
+def _config(root: Path) -> dict:
+    """读 config.json。_state 不在（单拷 core/）时退回本地读。"""
+    if load_config:
+        return load_config(root) or {}
+    p = root / "config.json"
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(read(p))
+    except Exception:
+        return {}
+
+
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------- 角色卡：迁移与命令
+
+ROLE_ARCHIVE_PREFIX = "agents-roles-"
+LEGACY_SOUL = ("agents", "{agent}", "SOUL.md")
+ROLE_SOUL = ("roles", "{role}", "SOUL.md")
+
+
+def _join(*parts: str) -> str:
+    return "/".join(parts)
+
+
+def _rel(root: Path, p: Path) -> str:
+    try:
+        return relative_to_root(root, p) if relative_to_root else p.as_posix()
+    except Exception:
+        return p.as_posix()
+
+
+def _suggest_roles(agents: list[str]) -> dict[str, str]:
+    """没配映射时给的默认建议：第一个用 advisor，其余按 harness 后缀分。"""
+    out = {}
+    for i, agent in enumerate(agents):
+        if i == 0:
+            out[agent] = "advisor"
+        else:
+            tail = agent.rsplit("-", 1)[-1] if "-" in agent else agent
+            out[agent] = f"advisor-{tail}"
+    return out
+
+
+def migrate_roles(root: Path, dry: bool = False, fallback_role: str = "") -> int:
+    """把 agents/<id>/SOUL.md 搬成 roles/<role>/SOUL.md，并改写 config。
+
+    三条硬规矩：
+    1. 映射不全就拒绝——一次搬错就是人格错乱，宁可让人补一行配置。
+    2. 目标卡已存在就跳过，绝不覆盖（两张卡的内容都可能是人写过的）。
+    3. 旧文件进 archive/，不删：git 之外还得留一份能直接翻的。
+    """
+    cfg = _config(root)
+    roles = role_map(root, cfg)
+    agents = [a for a in list_agents(root) if (root / "agents" / a / ROLE_CARD).is_file()]
+    if not agents:
+        print("没有要迁移的人格：agents/*/SOUL.md 一个都没有。")
+        return 0
+
+    mapping: dict[str, str] = {}
+    for agent in agents:
+        role = roles.get(agent, "")
+        if not role and fallback_role and ROLE_RE.match(fallback_role):
+            role = fallback_role
+        if role:
+            mapping[agent] = role
+
+    unmapped = [a for a in agents if a not in mapping]
+    if unmapped:
+        print("这些 agent 没有指定角色，拒绝迁移：")
+        for a in unmapped:
+            print(f"  - {a}")
+        print("在 config.json 补 roles 再跑，例如：")
+        print("  \"roles\": " + json.dumps(_suggest_roles(unmapped), ensure_ascii=False))
+        print("或加 --default-role <role> 让它们共用一张卡。")
+        return 2
+
+    by_role: dict[str, list[str]] = {}
+    for agent, role in mapping.items():
+        by_role.setdefault(role, []).append(agent)
+
+    archive_dir = root / "archive" / f"{ROLE_ARCHIVE_PREFIX}{date.today().isoformat()}"
+    order = (cfg.get("inject") or {}).get("order") or []
+    order_new = []
+    order_changed = False
+    for entry in order:
+        path = str(entry.get("path", ""))
+        if path == _join(*LEGACY_SOUL):
+            entry = dict(entry)
+            entry["path"] = _join(*ROLE_SOUL)
+            order_changed = True
+        order_new.append(entry)
+
+    plans = []
+    for role in sorted(by_role):
+        sources = sorted(by_role[role])
+        card = role_card(root, role)
+        if len(sources) > 1:
+            plans.append(("共用", role, sources, f"{len(sources)} 个 agent 指向同一张卡"))
+            keep = sources[0]
+        else:
+            keep = sources[0]
+        if card.is_file():
+            plans.append(("跳过", role, sources, "roles/%s/SOUL.md 已存在，不覆盖" % role))
+            continue
+        plans.append(("新建", role, sources, f"从 agents/{keep}/SOUL.md 复制"))
+
+    print(f"迁移计划（{'预演' if dry else '执行'}）：")
+    for action, role, sources, note in plans:
+        print(f"  [{action}] roles/{role}/SOUL.md  ←  {', '.join(sources)}   {note}")
+    print(f"  改写 config.json：schema→4、补 roles、inject.order 的 {_join(*LEGACY_SOUL)} → {_join(*ROLE_SOUL)}"
+          if order_changed else "  改写 config.json：schema→4、补 roles")
+    for agent in sorted(mapping):
+        print(f"  归档 agents/{agent}/SOUL.md → archive/{archive_dir.name}/{agent}-SOUL.md")
+
+    if dry:
+        print("\n（--dry：什么都没写）")
+        return 0
+
+    for role in sorted(by_role):
+        card = role_card(root, role)
+        if card.is_file():
+            continue
+        source = root / "agents" / sorted(by_role[role])[0] / ROLE_CARD
+        write(card, read(source))
+
+    for agent in sorted(mapping):
+        soul = root / "agents" / agent / ROLE_CARD
+        if not soul.is_file():
+            continue
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        target = archive_dir / f"{agent}-SOUL.md"
+        if target.exists():
+            target = archive_dir / f"{agent}-SOUL-{datetime.now().strftime('%H%M%S')}.md"
+        shutil.move(str(soul), str(target))
+
+    new_cfg = dict(cfg)
+    new_cfg["schema"] = CONFIG_DEFAULTS["schema"]
+    merged_roles = dict(roles)
+    merged_roles.update(mapping)
+    new_cfg["roles"] = merged_roles
+    if not default_role(root, cfg) and fallback_role:
+        new_cfg["defaultRole"] = fallback_role
+    elif "defaultRole" not in new_cfg:
+        new_cfg["defaultRole"] = ""
+    if order_changed:
+        inject = dict(new_cfg.get("inject") or {})
+        inject["order"] = order_new
+        new_cfg["inject"] = inject
+    _write_config(root, new_cfg)
+
+    print(f"\n迁移完成：{len(by_role)} 张卡、{len(mapping)} 个 agent。")
+    print("验一下：python core/memory.py checkup；再 dry 渲染一次确认读到的是自己的卡。")
+    return 0
+
+
+def cmd_roles(root: Path, argv: list[str]) -> int:
+    """roles：列角色卡；--migrate 把旧人格搬成卡。"""
+    if "--migrate" in argv:
+        return migrate_roles(root, "--dry" in argv, flag(argv, "--default-role") or "")
+
+    cfg = _config(root)
+    mapping = role_map(root, cfg)
+    fallback = default_role(root, cfg)
+    cards = list_roles(root, cfg)
+    print(f"角色卡目录：{root / ROLE_DIR}")
+    print(f"defaultRole：{fallback or '（没配）'}")
+    if not cards:
+        print("\n还没有角色卡。迁移旧人格：python core/memory.py roles --migrate --dry")
+    else:
+        print()
+        for c in cards:
+            users = "、".join(c["agents"]) or "（没有 agent 指向它）"
+            mark = "" if c["has_soul"] else "  ← 缺 SOUL.md"
+            name = f" · {c['name']}" if c["name"] else ""
+            print(f"  {pad(c['role'], 18)}{name}{mark}")
+            print(f"  {' ' * 18}{users}")
+
+    print("\nagent 读哪张卡：")
+    for agent in list_agents(root):
+        role, source = resolve_role(root, agent, cfg)
+        legacy = (root / "agents" / agent / ROLE_CARD).is_file()
+        card = f"roles/{role}/SOUL.md" if role else "（没有角色卡）"
+        extra = "（旧人格还在）" if legacy else ""
+        print(f"  {pad(agent, 16)}{pad(card, 32)}{source}{extra}")
+    return 0
 
 
 def write(path: Path, text: str) -> None:
@@ -976,24 +1197,35 @@ def _session_start_module():
     return mod
 
 
-def render_injected(root: Path, agent: str | None = None, project: Path | None = None) -> dict:
+def render_injected(
+    root: Path,
+    agent: str | None = None,
+    project: Path | None = None,
+    role: str | None = None,
+) -> dict:
     """跑真正的注入渲染器，只取结果大小。
 
     **不能 subprocess 跑 `--dry`**：那条路会 `write_state` 并 `touch_access`，
     等于每开一次设置页就伪造一次「刚读过」，把 `archive.staleDays` 的陈旧判定毁掉。
     `load()` 本身是纯函数（`hooks/session-start.py:194`），所以直接调它。
     """
+    cfg = (load_config(root) if load_config else {}) or {}
     if not agent:
         candidates = [default_agent(root)] + list_agents(root)
         agent = next((a for a in candidates if (root / "agents" / a).is_dir()), "default")
-    cfg = (load_config(root) if load_config else {}) or {}
+    if role is None:
+        role, role_src = resolve_role(root, agent, cfg)
+    else:
+        role, role_src = (role, "cli") if role else ("", "none")
     kind = parse_frontmatter(project / "_meta.md").get("kind", "") if project else ""
     harness = agent.rsplit("-", 1)[-1] if "-" in agent else "unknown"
     warnings: list[str] = []
     mod = _session_start_module()
-    output, injected = mod.load(root, agent, cfg, project, warnings, harness, kind)
+    output, injected = mod.load(root, agent, cfg, project, warnings, harness, kind, role=role)
     return {
         "agent": agent,
+        "role": role,
+        "roleSource": role_src,
         "project": project.as_posix() if project else "",
         "kind": kind,
         "chars": len(output),
@@ -1467,20 +1699,68 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
                     "提炼进对应文件，再在日志末尾补 `提炼：文件名` 或 `提炼：无（理由）`",
                 ))
 
-    # 0.5 人格：IDENTITY.md 时代的两条遗留。2026-10-27 起身份并进 SOUL，
-    # 旧的按 agent 分文件做法不该再有新文件长出来。
+    # 0.5 人格：2026-10-27 起是角色卡（roles/<role>/SOUL.md），旧位置
+    # agents/<id>/SOUL.md 只在迁移期被兼容读。下面五条全部只报不修：
+    # 搬卡是「一次做对、做错就人格错乱」的动作，不该给按钮。
+    cfg_now = _config(root)
+    cards = list_roles(root, cfg_now)
+
+    for card in cards:
+        role = card["role"]
+        users = "、".join(card["agents"]) or "没有 agent 指向它"
+        if not card["has_soul"]:
+            problems.append((
+                2, f"角色 {role}",
+                f"roles/{role}/SOUL.md 不存在（{users}）",
+                "补一张卡，或把 config.roles / defaultRole 指向已有的卡",
+            ))
+            continue
+        fm_text = _meta_parts(read(role_card(root, role)))[0]
+        missing = [k for k in ("name", "identity") if not _fm_get(fm_text, k)]
+        if missing:
+            problems.append((
+                3, f"角色 {role}",
+                f"SOUL.md 缺字段：{'/'.join(missing)}",
+                "人格页可改，或手写 frontmatter——name / identity 是机器读的",
+            ))
+        if len(card["agents"]) > 1:
+            problems.append((
+                3, f"角色 {role}",
+                f"{len(card['agents'])} 个 agent 共用这张卡：{'、'.join(card['agents'])}",
+                "它们是同一个人就正常；不是就拆成两张卡，各自 roles 指过去",
+            ))
+
+    fallback = default_role(root, cfg_now)
+    if fallback and not role_card(root, fallback).is_file():
+        problems.append((
+            1, "config.json",
+            f"defaultRole={fallback}，但 roles/{fallback}/SOUL.md 不存在",
+            "补这张卡，或把 defaultRole 指向已有的卡——没配角色的 agent 会注入空人格",
+        ))
+
     for name in list_agents(root):
         agent_dir = root / "agents" / name
         if (agent_dir / ".legacy").exists():
             continue
-        soul_path = agent_dir / "SOUL.md"
-        soul_fm = _meta_parts(read(soul_path))[0] if soul_path.is_file() else ""
-        missing = [k for k in ("name", "identity") if not _fm_get(soul_fm, k)]
-        if missing:
+        role, role_src = resolve_role(root, name, cfg_now)
+        legacy = agent_dir / "SOUL.md"
+        if role and legacy.is_file():
             problems.append((
                 3, f"agent {name}",
-                f"SOUL.md 缺字段：{'/'.join(missing)}",
-                "人格页可改，或手写 frontmatter——name / identity 是机器读的",
+                f"旧的 agents/{name}/SOUL.md 还在（现在读 roles/{role}/SOUL.md）",
+                "跑 `roles --migrate --dry` 看一眼再真跑；旧文件会进 archive/",
+            ))
+        elif not role and not legacy.is_file():
+            problems.append((
+                3, f"agent {name}",
+                "没有可注入的人格：既没配角色卡，也没有 agents/<id>/SOUL.md",
+                "配 config.roles 并建 roles/<role>/SOUL.md，或跑 `roles --migrate`",
+            ))
+        elif role_src == "config.defaultRole":
+            problems.append((
+                3, f"agent {name}",
+                f"没在 config.roles 里，回退到 defaultRole={role}",
+                "要固定这张卡就写进 roles；故意回退的话这条可以不管",
             ))
         if (agent_dir / "IDENTITY.md").is_file():
             problems.append((
@@ -3173,6 +3453,8 @@ def main(argv: list[str]) -> int:
         return cmd_skills(root, argv)
     if cmd == "persona":
         return cmd_persona(root, argv)
+    if cmd == "roles":
+        return cmd_roles(root, argv)
     if cmd == "init":
         if "--agent" in argv:
             agent = flag(argv, "--agent")
