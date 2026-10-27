@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """记忆库运行时状态的公共函数。
 
-session-start.py / post-read.py / stop.py 共用，避免三份实现各自漂移。
+session-start.py（DSH 的渲染器）与 core/memory.py 共用，避免两份实现各自漂移。
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def find_project_book(start: Path | str | None = None) -> Path | None:
 # ---------------------------------------------------------------- 身份
 #
 # agent_id = <persona>-<harness>，例如 moxie-wb / moxie-dsh。
-# 为什么带 harness：DSH 和 WorkBuddy 共用同一个 ~/.memory，如果都叫 moxie，
+# 为什么带 harness（历史决定，0.6.5 后待改，见 FRAMEWORK §2.2.1）：两个 harness 共用同一个 ~/.memory，如果都叫 moxie，
 # 两边的人格、日志、冷却会互相踩。一个 agent 一间房。
 
 AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -265,8 +265,8 @@ def session_key(session_id: str) -> str:
 def remember_session(root: Path, session_id: str, agent: str, harness: str) -> None:
     """会话 → agent 映射。一个会话一个文件，并发写天然不冲突。
 
-    post-read 的 payload 里没有 transcript_path，拿不到 harness，
-    只能靠这张表查回是哪个 agent。
+    渲染器的 payload 里没有 transcript_path，拿不到 harness，
+    只能靠这张表查回是哪个 agent（DSH 侧按会话复用同一张表）。
     """
     sid = session_key(session_id)
     if sid == "unknown":

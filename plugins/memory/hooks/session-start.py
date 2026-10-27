@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SessionStart hook：把记忆注入会话上下文。
 
-WorkBuddy 的 SessionStart hook 会把本脚本的 stdout 直接加进上下文。
+DSH 适配器以子进程跑本脚本、把 stdout 包成一条 user 消息注入；设置页算预算时也直接调它的 load()。
 所以这里只输出记忆本身，不输出任何调试信息（调试走 stderr）。
 
 注入分四块：
@@ -498,7 +498,7 @@ def main(argv: list[str]) -> int:
         f"项目册={project or '无'} kind={project_kind or '无'}"
     )
 
-    # 会话 → agent 映射：post-read 的 payload 里没有 transcript_path，只能查这张表
+    # 会话 → agent 映射：payload 里没有 transcript_path，只能查这张表
     remember_session(root, str(payload.get("session_id", "")), agent, harness)
     prune_sessions(root, days=7)
 

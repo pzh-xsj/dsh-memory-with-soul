@@ -27,7 +27,7 @@ CLI 在 `<插件根>/core/memory.py`，十一个入口：
 
 ## 我是谁（agent 身份）
 
-`agent_id` 形如 `moxie-wb` / `moxie-dsh`：**persona + harness**。同一个 moxie 在 WorkBuddy 和 DSH 里是**两个 agent，两个目录**，人格和日志各走各的。
+`agent_id` 现在还是 `moxie-dsh` 这种 **persona + harness**（历史遗留：WorkBuddy 已退场，只有 DSH 在写）。**人格不挂在 agent 上**——它读 `roles/<role>/SOUL.md`，agent 只是指向卡的指针。
 
 注入内容第一行 `# 长期记忆（agent: xxx，harness: yyy，库：...）` 就是当前身份，**不要猜**。
 

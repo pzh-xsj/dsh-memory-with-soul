@@ -8,10 +8,8 @@
         │
 hooks/session-start.py         渲染器：读 config → 拼 <memory-context> → stdout
         │
-   ┌────┴─────────────────────────┐
-adapters/wb/                  adapters/dsh/
-（还没搬，仍在           SessionStart hook 的 stdout 直接进上下文
- hooks/hooks.json 里）
+        │
+   adapters/dsh/            SessionStart hook 的 stdout 直接进上下文
 ```
 
 ## 契约：适配器只干四件事
@@ -35,10 +33,9 @@ per-agent 的东西注册在 `agent/created` 拿到的 `agent.ctx` 上。
 
 | harness | 注入点 | 身份来源 |
 | --- | --- | --- |
-| wb (WorkBuddy / CodeBuddy) | `hooks/hooks.json` 的 SessionStart，**stdout 直接进上下文** | `payload.agent_type` → `config.defaultAgent` |
 | dsh (DeepSeek Harness) | bundle 监听 `agent/created` → `agent.inject(createUserMessage)` | `MEMORY_HARNESS=dsh` → `<defaultAgent>-dsh` |
 
-两边共用同一份 `config.json`，所以「注入什么、注多少」永远只有一处定义。
+**0.6.5 起只剩 DSH 一个宿主。** WorkBuddy 的钩子（`hooks/hooks.json`、`post-read.py`、`stop.py`）与它的两层清单已删——WB 从 10-27 起冻结，目标是卸掉，不再维护第二个适配器。注入表仍然只有 `config.json` 一处定义，接第三个 harness 只需写 `adapters/<name>/`。
 
 ## adapters/dsh
 
@@ -110,4 +107,4 @@ node smoke.mjs          # 9/9 通过 = 清单、模块、渲染器三关都过
 4. 写一个不需要装进该 harness 的 smoke，覆盖「有项目册 / 无项目册 / 路径不存在」三种 cwd；
 5. 在 README 的「各 harness 怎么接」表里加一行。
 
-_（wb 那份还在 `hooks/hooks.json` 里没搬过来：`plugin.json` 的 `"hooks": "./hooks/hooks.json"` 指着真实路径，搬动会断。等 dsh 这条跑顺了再收。）_
+_（wb 那份已随 0.6.5 删除；要接新 harness 见上一节五步。）_

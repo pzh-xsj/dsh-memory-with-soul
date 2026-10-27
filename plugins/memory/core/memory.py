@@ -2,7 +2,7 @@
 """记忆库 CLI —— 平台无关的核心。
 
 不依赖任何第三方库，任何装了 Python 3.8+ 的机器都能跑。
-平台适配器（WorkBuddy hook、将来的其他平台）只负责调用这里的命令，
+平台适配器（现在只有 DSH）只负责调用这里的命令，
 数据格式和业务逻辑全在本文件。
 
 用法：
@@ -2302,9 +2302,9 @@ def cmd_checkup(root: Path, all_projects: bool = False, do_fix: bool = False,
 
 # ---------------------------------------------------------------- 命令：digest
 #
-# 提炼提醒的判定逻辑只有这一份：WB 的 hooks/stop.py 与 DSH 的 Stop 都调
-# `digest_check`，只是把结果打成各自 harness 认的外壳。以前它在 stop.py 里，
-# WB 一旦冻结，DSH 侧就得抄一遍——抄一遍就是两个真相源。
+# 提炼提醒的判定逻辑只有这一份：DSH 的 Stop 接线调 `digest_check`，
+# 自己只负责把结果打成该 harness 认的外壳。以前它在 WB 的 hooks/stop.py 里，
+# 那个钩子随 0.6.5 删除——逻辑留在 core，宿主薄壳只做翻译。
 
 # 提醒状态里最多保留多少条「会话 → 次数」记录
 DIGEST_SESSION_RECORDS = 20
