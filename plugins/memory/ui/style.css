@@ -1,20 +1,106 @@
 /* 记忆库设置页 · 样式
-   只做这一页用，不引外部字体/图标：离线可用，双击打开也不会白屏。 */
+   只做这一页用，不引外部字体/图标：离线可用，双击打开也不会白屏。
+
+   两套主题走同一组变量：默认纯黑（--bg 就是 #000），[data-theme="light"] 整组覆盖。
+   token 区之外不许出现颜色字面量——自检会查；漏一个，亮色下就有一块是黑的。 */
 
 :root {
-  --bg: #12141a;
-  --panel: #181b22;
-  --panel-2: #1f232c;
-  --line: #262b35;
-  --line-soft: #1e222b;
-  --fg: #e6e8ee;
-  --muted: #8a92a2;
+  color-scheme: dark;
+  --bg: #000;
+  --panel: #0a0b0d;
+  --panel-2: #12141a;
+  --line: #23262d;
+  --line-soft: #171a20;
+  --fg: #e8e9ee;
+  --muted: #8d95a6;
   --accent: #7aa2f7;
-  --accent-dim: #2b3a57;
+  --accent-dim: #24304a;
   --ok: #4fbf8f;
   --warn: #e0b05c;
   --err: #e5707e;
+  --topbar-bg: rgba(0, 0, 0, .86);
+  --ring: rgba(122, 162, 247, .22);
+  --btn-hover: #191c22;
+  --btn-hover-strong: #242932;
+  --row-hover: rgba(255, 255, 255, .03);
+  --primary-bg: #24304a;
+  --primary-border: #3a4f74;
+  --primary-fg: #dbe6ff;
+  --primary-hover: #2b3a57;
+  --active-fg: #dbe6ff;
+  --meter-a: #4f8ef7;
+  --meter-b: #7aa2f7;
+  --meter-over-a: #b7452f;
+  --meter-over-b: var(--err);
+  --toast-bg: #14181f;
+  --toast-line: #2a313d;
+  --toast-shadow: rgba(0, 0, 0, .6);
+  --toast-err-bg: #2a151b;
+  --toast-err-line: #5a2a34;
+  --toast-err-fg: #ffd9df;
+  --conflict-line: rgba(224, 176, 92, .5);
+  --conflict-bg: rgba(224, 176, 92, .10);
+  --badge-ok-bg: rgba(79, 191, 143, .12);
+  --badge-ok-line: rgba(79, 191, 143, .38);
+  --badge-warn-bg: rgba(224, 176, 92, .12);
+  --badge-warn-line: rgba(224, 176, 92, .38);
+  --badge-err-bg: rgba(229, 112, 126, .12);
+  --badge-err-line: rgba(229, 112, 126, .38);
+  --badge-info-bg: rgba(122, 162, 247, .12);
+  --badge-info-line: rgba(122, 162, 247, .38);
   --radius: 10px;
+}
+
+/* 亮色：accent / ok / warn / err 全部加深一档。#7aa2f7 在白底上对比度只有约 2.3:1，
+   当文字用不达标；这里换 #2f62d8 这类深色，边框和底纹跟着各自加深。 */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #fff;
+  --panel: #f7f8fa;
+  --panel-2: #eef0f4;
+  --line: #dfe3ea;
+  --line-soft: #eaedf2;
+  --fg: #1a1d23;
+  --muted: #5f6773;
+  --accent: #2f62d8;
+  --accent-dim: #dbe5fb;
+  --ok: #1c7f57;
+  --warn: #96660f;
+  --err: #c0303f;
+  --topbar-bg: rgba(255, 255, 255, .9);
+  --ring: rgba(47, 98, 216, .25);
+  --btn-hover: #e9ecf2;
+  --btn-hover-strong: #dde2ea;
+  --row-hover: rgba(0, 0, 0, .03);
+  --primary-bg: #2f62d8;
+  --primary-border: #2f62d8;
+  --primary-fg: #fff;
+  --primary-hover: #2752b8;
+  --active-fg: #1f4fb8;
+  --meter-a: #2f62d8;
+  --meter-b: #6c95ee;
+  --meter-over-a: #d2553a;
+  --meter-over-b: var(--err);
+  --toast-bg: #14181f;
+  --toast-line: #2a313d;
+  --toast-shadow: rgba(0, 0, 0, .35);
+  --toast-err-bg: #2a151b;
+  --toast-err-line: #5a2a34;
+  --toast-err-fg: #ffd9df;
+  --conflict-line: rgba(150, 102, 15, .5);
+  --conflict-bg: rgba(224, 176, 92, .16);
+  --badge-ok-bg: rgba(28, 127, 87, .10);
+  --badge-ok-line: rgba(28, 127, 87, .4);
+  --badge-warn-bg: rgba(150, 102, 15, .10);
+  --badge-warn-line: rgba(150, 102, 15, .4);
+  --badge-err-bg: rgba(192, 48, 63, .10);
+  --badge-err-line: rgba(192, 48, 63, .4);
+  --badge-info-bg: rgba(47, 98, 216, .10);
+  --badge-info-line: rgba(47, 98, 216, .4);
+  --radius: 10px;
+}
+
+html {
   --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
 }
@@ -40,6 +126,7 @@ code {
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: 1px 5px;
+  color: var(--fg);
 }
 
 /* ---------------------------------------------------------------- 顶栏 */
@@ -59,7 +146,7 @@ code {
   justify-content: space-between;
   gap: 16px;
   padding: 14px 24px;
-  background: rgba(18, 20, 26, .88);
+  background: var(--topbar-bg);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--line);
 }
@@ -99,6 +186,14 @@ body.embed main {
 }
 
 .conn { display: flex; align-items: center; gap: 10px; }
+
+/* 主题按钮是单字形，正文的 sans 里 ☀/☾ 会随字体变成彩色 emoji，大小不听 font-size */
+#themeBtn {
+  font-family: "Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols", sans-serif;
+  font-size: 15px;
+  line-height: 1;
+  padding: 6px 10px;
+}
 
 /* ---------------------------------------------------------------- 状态条 */
 
@@ -241,7 +336,7 @@ input[type=search]:focus,
 select:focus,
 textarea:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(122, 162, 247, .16);
+  box-shadow: 0 0 0 3px var(--ring);
 }
 
 input:disabled, select:disabled, textarea:disabled {
@@ -289,18 +384,29 @@ button {
   cursor: pointer;
   transition: background .15s, border-color .15s, color .15s;
 }
-button:hover:not(:disabled) { background: #262b35; border-color: #333a46; }
-button:disabled { opacity: .45; cursor: not-allowed; }
+button:hover:not(:disabled) { background: var(--btn-hover); border-color: var(--btn-hover-strong); }
+button:disabled { opacity: .5; cursor: not-allowed; }
 
 button.primary {
-  background: var(--accent-dim);
-  border-color: #3a4f74;
-  color: #d8e4ff;
+  background: var(--primary-bg);
+  border-color: var(--primary-border);
+  color: var(--primary-fg);
 }
-button.primary:hover:not(:disabled) { background: #34456a; }
+button.primary:hover:not(:disabled) { background: var(--primary-hover); }
+/* 亮色下 --primary-fg 是白字，压在半透明的淡蓝底上等于看不见；
+   禁用的主按钮退回中性灰，别用降透明度硬撑（叠两层降透明度会糊成一片） */
+button.primary:disabled {
+  background: var(--panel-2);
+  border-color: var(--line);
+  color: var(--muted);
+  opacity: 1;
+}
 
 button.ghost { background: transparent; }
 button.small { font-size: 12px; padding: 5px 10px; }
+
+/* 表格里的「修复」：窄一档，别把「怎么办」挤到换行 */
+td button.small { padding: 3px 10px; white-space: nowrap; }
 
 /* ---------------------------------------------------------------- 标签 */
 
@@ -315,10 +421,10 @@ button.small { font-size: 12px; padding: 5px 10px; }
   color: var(--muted);
   white-space: nowrap;
 }
-.badge.ok { color: var(--ok); border-color: rgba(79, 191, 143, .35); background: rgba(79, 191, 143, .10); }
-.badge.warn { color: var(--warn); border-color: rgba(224, 176, 92, .35); background: rgba(224, 176, 92, .10); }
-.badge.err { color: var(--err); border-color: rgba(229, 112, 126, .35); background: rgba(229, 112, 126, .10); }
-.badge.accent { color: var(--accent); border-color: rgba(122, 162, 247, .35); background: rgba(122, 162, 247, .10); }
+.badge.ok { color: var(--ok); border-color: var(--badge-ok-line); background: var(--badge-ok-bg); }
+.badge.warn { color: var(--warn); border-color: var(--badge-warn-line); background: var(--badge-warn-bg); }
+.badge.err { color: var(--err); border-color: var(--badge-err-line); background: var(--badge-err-bg); }
+.badge.accent { color: var(--accent); border-color: var(--badge-info-line); background: var(--badge-info-bg); }
 
 .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .chip {
@@ -345,11 +451,11 @@ button.small { font-size: 12px; padding: 5px 10px; }
   display: block;
   height: 100%;
   width: 0;
-  background: linear-gradient(90deg, #4f8ef7, #7aa2f7);
+  background: linear-gradient(90deg, var(--meter-a), var(--meter-b));
   transition: width .35s ease;
 }
-.meter.over > i { background: linear-gradient(90deg, #b7452f, var(--err)); }
-.meter.over { border-color: rgba(229, 112, 126, .5); }
+.meter.over > i { background: linear-gradient(90deg, var(--meter-over-a), var(--meter-over-b)); }
+.meter.over { border-color: var(--badge-err-line); }
 
 /* ---------------------------------------------------------------- 表格 */
 
@@ -369,7 +475,7 @@ td {
   vertical-align: top;
 }
 tbody tr:last-child td { border-bottom: 0; }
-tbody tr:hover td { background: rgba(255, 255, 255, .018); }
+tbody tr:hover td { background: var(--row-hover); }
 td.path, .path {
   font-family: var(--mono);
   font-size: 11.5px;
@@ -422,7 +528,7 @@ details.group > .body { padding: 0 0 8px 14px; }
   font-size: 12.5px;
 }
 .list-item:hover { background: var(--panel-2); }
-.list-item.active { background: var(--accent-dim); color: #dbe6ff; }
+.list-item.active { background: var(--accent-dim); color: var(--active-fg); }
 .list-item .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-item .meta { flex: 0 0 auto; white-space: nowrap; margin-left: auto; color: var(--muted); font-size: 11px; font-family: var(--mono); }
 
@@ -434,18 +540,19 @@ details.group > .body > .list-item { border-radius: 4px; }
 
 /* ---------------------------------------------------------------- toast */
 
+/* 浮层不随主题换：它在页面最上层，白底页面里要的也是「浮起来」的对比度 */
 #toast {
   position: fixed;
   left: 50%;
   bottom: 28px;
   transform: translate(-50%, 16px);
-  background: #26303f;
-  border: 1px solid #35415a;
+  background: var(--toast-bg);
+  border: 1px solid var(--toast-line);
   color: var(--fg);
   padding: 10px 18px;
   border-radius: 999px;
   font-size: 13px;
-  box-shadow: 0 12px 34px rgba(0, 0, 0, .45);
+  box-shadow: 0 12px 34px var(--toast-shadow);
   opacity: 0;
   pointer-events: none;
   transition: opacity .2s ease, transform .2s ease;
@@ -453,7 +560,7 @@ details.group > .body > .list-item { border-radius: 4px; }
   max-width: 72vw;
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
-#toast.err { background: #3a2029; border-color: #6d3242; color: #ffd9df; }
+#toast.err { background: var(--toast-err-bg); border-color: var(--toast-err-line); color: var(--toast-err-fg); }
 
 /* ---------------------------------------------------------------- 小屏 */
 
@@ -480,9 +587,9 @@ details.group > .body > .list-item { border-radius: 4px; }
   gap: 10px;
   padding: 10px 12px;
   margin-bottom: 12px;
-  border: 1px solid rgba(224, 176, 92, .45);
+  border: 1px solid var(--conflict-line);
   border-radius: 8px;
-  background: rgba(224, 176, 92, .12);
+  background: var(--conflict-bg);
   color: var(--fg);
   font-size: 13px;
 }

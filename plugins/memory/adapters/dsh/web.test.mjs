@@ -118,7 +118,7 @@ const html = await page.text()
 check('页面 200', page.status === 200, String(page.status))
 check('注入了 API_BASE', html.includes('window.__MEMORY_API_BASE__="/api/memory"'))
 check('注入了 EMBEDDED', html.includes('window.__MEMORY_EMBEDDED__=true'))
-check('页面有五个页签', ['概览', '记忆', '人格', '体检', '设置'].every((t) => html.includes(t)))
+check('页面有六个页签', ['概览', '记忆', '人格', '用户', '体检', '设置'].every((t) => html.includes(t)))
 
 const css = await routes.get(`${API_PREFIX}/style.css`).fetch(new Request(`http://127.0.0.1:1${API_PREFIX}/style.css`))
 check('样式表 200', css.status === 200, String(css.status))
@@ -169,6 +169,14 @@ const post = async (key, payload) => {
 const persona = await post('persona', { agent: 'moxie-dsh', file: 'SOUL.md', text: 'x', mtime: 1 })
 check('persona 过期 mtime → 409', persona.status === 409, String(persona.status))
 
+// 一键修与顺序：POST 挂在同一条路由上，写通道只认白名单动作
+const fixBogus = await post('checkup', { kinds: ['bogus'] })
+check('修复杂项 → 400', fixBogus.status === 400, `${fixBogus.status} ${fixBogus.body.error ?? ''}`)
+
+const orderPaths = (config.body.config?.inject?.order ?? []).map((e) => e.path)
+const orderShort = await post('config', { order: orderPaths.slice(0, -1) })
+check('顺序少一条 → 400', orderShort.status === 400, `${orderShort.status}`)
+
 const personaBad = await post('persona', { agent: 'moxie-dsh', file: '../../config.json', text: 'x' })
 check('persona 只认 SOUL.md', personaBad.status === 400, `${personaBad.status} ${personaBad.body.error ?? ''}`)
 
@@ -188,6 +196,7 @@ check('写越界路径被拒', fileEscape.status === 400 || fileEscape.status ==
 check('tree 只声明 GET', String(routes.get(`${API_PREFIX}/tree`).methods) === 'GET', String(routes.get(`${API_PREFIX}/tree`).methods))
 check('soul 只声明 POST', String(routes.get(`${API_PREFIX}/soul`).methods) === 'POST')
 check('config 声明 GET,POST', String(routes.get(`${API_PREFIX}/config`).methods) === 'GET,POST')
+check('checkup 声明 GET,POST', String(routes.get(`${API_PREFIX}/checkup`).methods) === 'GET,POST', String(routes.get(`${API_PREFIX}/checkup`).methods))
 check('file 声明 GET,POST', String(routes.get(`${API_PREFIX}/file`).methods) === 'GET,POST', String(routes.get(`${API_PREFIX}/file`).methods))
 check('persona 只声明 POST', String(routes.get(`${API_PREFIX}/persona`).methods) === 'POST')
 check('全部路由都带 requestBody', [...routes.values()].every((r) => r.requestBody === 'buffered'))

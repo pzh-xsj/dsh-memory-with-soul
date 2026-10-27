@@ -10,6 +10,7 @@
     python memory.py status --all        跨所有项目册汇总
     python memory.py checkup             体检，输出行动清单
     python memory.py checkup --all       每个项目册都体检
+    python memory.py checkup --fix       顺手修掉四类机械问题（--dry 先看要做什么）
     python memory.py index               看索引是否漂移
     python memory.py index --write       重写索引三张表（保留手写行）
     python memory.py workspaces          列登记的项目册
@@ -32,7 +33,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -151,6 +154,17 @@ CONFIG_DEFAULTS = {
     },
     "archive": {"staleDays": 180},
     "sync": {"enabled": False, "remote": ""},
+}
+
+# 体检问题里「怎么改是确定的」那一小撮。fix 存的是数据（kind + 参数），
+# 不是命令字符串：设置页只能点这四个 kind，改不了文件路径，也拼不出任意命令。
+# 其余问题（内容判断、JSON 坏了、schema 不符）一律不给 fix——机器不该替人做决定。
+FIX_KINDS = ("index_sync", "merge_identity", "config_sync_off", "config_drop_unknown")
+FIX_LABELS = {
+    "index_sync": "同步总索引三张表",
+    "merge_identity": "把 IDENTITY.md 并进 SOUL.md",
+    "config_sync_off": "把 sync.enabled 改回 false",
+    "config_drop_unknown": "删掉 config 里代码不认识的键",
 }
 
 
@@ -1284,7 +1298,7 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
 
     `all_projects=True` 时「日志未提炼」扫所有登记项目册，不只当前 cwd 那个。
     """
-    problems = []  # (严重度, 对象, 说明, 建议动作)
+    problems = []  # (严重度, 对象, 说明, 建议动作[, 可机械修复的动作])
 
     # 0. 未提炼的日志——头号问题，排最前。按 agent 逐个扫，别只看默认那个
     scan_dirs = []  # (标签, 目录)
@@ -1338,6 +1352,7 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
                 3, f"agent {name}",
                 "IDENTITY.md 还在，身份已并入 SOUL.md",
                 "跑 `persona --merge-identity` 收口，原文件会移到 archive/",
+                {"kind": "merge_identity", "agent": name},
             ))
 
     # 1. playbooks / topics 的元信息质量
@@ -1528,6 +1543,7 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
                     2, "shared",
                     f"总索引的{section}表和实际状态不一致",
                     "跑 `index --write` 同步",
+                    {"kind": "index_sync"},
                 ))
 
     # 5. 配置自身的自洽性。`sync` / `schema` 曾经是零消费者字段——写了没人读，
@@ -1555,6 +1571,7 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
                     2, "config.json",
                     "sync.enabled=true，但同步功能还没实现",
                     "改回 false。现在开它只是给未来的自己一个假承诺",
+                    {"kind": "config_sync_off"},
                 ))
             unknown = sorted(set(cfg) - set(CONFIG_DEFAULTS))
             if unknown:
@@ -1562,6 +1579,7 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
                     3, "config.json",
                     f"有代码不认识的键：{'、'.join(unknown)}",
                     "删掉，或把它接进 CONFIG_DEFAULTS——不接就是下一个死字段",
+                    {"kind": "config_drop_unknown", "keys": unknown},
                 ))
 
     problems.sort(key=lambda x: x[0])
@@ -1571,7 +1589,8 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
 
     todo = []
     seen = set()
-    for _, obj, _desc, action in problems:
+    for row in problems:
+        obj, action = row[1], row[3]
         key = (obj, action)
         if key in seen:
             continue
@@ -1584,8 +1603,16 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
         "root": root.as_posix(),
         "logScan": [label for label, _ in scan_dirs],
         "problems": [
-            {"level": lv, "levelName": LEVEL_NAMES[lv], "object": obj, "desc": desc, "action": act}
-            for lv, obj, desc, act in problems
+            {
+                "level": row[0],
+                "levelName": LEVEL_NAMES[row[0]],
+                "object": row[1],
+                "desc": row[2],
+                "action": row[3],
+                # 只有确定性修复才有；其余是 None，前端据此决定要不要画「修复」按钮
+                "fix": row[4] if len(row) > 4 else None,
+            }
+            for row in problems
         ],
         "topActions": todo,
         "stale": stale,
@@ -1596,8 +1623,195 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
     }
 
 
-def cmd_checkup(root: Path, all_projects: bool = False) -> int:
+# ---------------------------------------------------------------- 体检：机械修复
+#
+# 只有 FIX_KINDS 里那四类「怎么改是确定的」。设置页点一下按钮就是调这里，
+# 所以这一层必须自己再算一遍问题清单：请求体里只有 kind，agent / keys
+# 一律用刚算出来的——不信任请求体，接口就没法被拿去做别的事。
+
+def _read_config_strict(root: Path) -> dict:
+    """读配置，读不懂就抛。和 `load_config` 的区别：那个会吞异常给 {}，
+    往 {} 上写等于把整份配置覆盖成空——修配置的功能尤其不能这么干。"""
+    p = root / "config.json"
+    if not p.is_file():
+        raise FileNotFoundError(f"没有 {p}")
+    try:
+        cfg = json.loads(read(p))
+    except Exception as exc:
+        raise ValueError(f"config.json 解析失败，先手工修好再点修复：{exc}") from exc
+    if not isinstance(cfg, dict):
+        raise ValueError("config.json 顶层不是对象")
+    return cfg
+
+
+def _write_config(root: Path, cfg: dict) -> None:
+    p = root / "config.json"
+    backup(p, root)
+    write(p, json.dumps(cfg, ensure_ascii=False, indent=2) + "\n")
+
+
+def _run_fix(root: Path, fix: dict) -> str:
+    """执行一条修复，返回给人看的短句。失败抛异常，由 apply_fixes 收成 ok:false。"""
+    kind = fix.get("kind")
+
+    if kind == "index_sync":
+        p = root / "shared" / "index.md"
+        text = read(p)
+        drifts = index_drift(root, text)
+        if not drifts:
+            return "索引没有漂移"
+        backup(p, root)
+        write_index(root, text, drifts)
+        return f"同步了 {len(drifts)} 张表"
+
+    if kind == "merge_identity":
+        agent = str(fix.get("agent") or "")
+        buf = io.StringIO()
+        # merge_identity 是给人用的 CLI 函数，会 print；接口调用时截下来塞进结果，
+        # 免得服务端日志里混进一段 CLI 输出
+        with contextlib.redirect_stdout(buf):
+            rc = merge_identity(root, agent or None)
+        if rc != 0:
+            raise RuntimeError(buf.getvalue().strip()[:300] or "合并失败")
+        return f"{agent or '所有 agent'} 的 IDENTITY.md 已并入 SOUL.md"
+
+    if kind == "config_sync_off":
+        cfg = _read_config_strict(root)
+        if not (cfg.get("sync") or {}).get("enabled"):
+            return "sync.enabled 已经是 false"
+        cfg.setdefault("sync", {})["enabled"] = False
+        _write_config(root, cfg)
+        return "sync.enabled 改回 false"
+
+    if kind == "config_drop_unknown":
+        cfg = _read_config_strict(root)
+        drop = [k for k in (fix.get("keys") or []) if k in cfg and k not in CONFIG_DEFAULTS]
+        if not drop:
+            return "没有要删的键"
+        for k in drop:
+            cfg.pop(k, None)
+        _write_config(root, cfg)
+        return f"删掉未知键：{'、'.join(drop)}"
+
+    raise ValueError(f"不认识的修复类型：{kind}")
+
+
+def apply_fixes(root: Path, kinds: list[str], dry: bool = False) -> dict:
+    """执行请求的修复。只做当前记忆库里、现在真的存在的问题。
+
+    返回 {applied: [{kind, ok, detail}], skipped: [{kind, why}], remaining, clean}。
+    `remaining` 是修完后的问题条数——前端拿它决定「修可修的 N 项」还亮不亮。
+    """
+    if not isinstance(kinds, list) or not all(isinstance(k, str) for k in kinds):
+        raise ValueError("kinds 要是个字符串数组")
+    bad = sorted(set(kinds) - set(FIX_KINDS))
+    if bad:
+        raise ValueError(f"不认识的修复类型：{'、'.join(bad)}")
+
+    fresh = collect_checkup(root)
+    available: list[dict] = []
+    seen = set()
+    for p in fresh["problems"]:
+        fx = p.get("fix")
+        if isinstance(fx, dict) and fx.get("kind") in FIX_KINDS and fx["kind"] not in seen:
+            seen.add(fx["kind"])
+            available.append(fx)
+
+    applied = []
+    for fx in available:
+        if fx["kind"] not in kinds:
+            continue
+        if dry:
+            applied.append({"kind": fx["kind"], "ok": True,
+                            "detail": f"将执行：{FIX_LABELS[fx['kind']]}"})
+            continue
+        try:
+            applied.append({"kind": fx["kind"], "ok": True, "detail": _run_fix(root, fx)})
+        except Exception as exc:
+            applied.append({"kind": fx["kind"], "ok": False, "detail": str(exc)})
+
+    skipped = [
+        {"kind": k, "why": "这条问题已经不在了（可能刚被别人改过）"}
+        for k in sorted(set(kinds) - {a["kind"] for a in available})
+    ]
+    after = collect_checkup(root)
+    return {"applied": applied, "skipped": skipped,
+            "remaining": len(after["problems"]), "clean": after["clean"]}
+
+
+# ---------------------------------------------------------------- 配置：注入顺序
+#
+# 顺序的真相是 `priority`：hooks/session-start.py 按 (priority, path) 排序，
+# 数组顺序只决定遍历。所以「在页面上调顺序」必须重写 priority，否则点保存
+# 什么都不会变。README 曾经把它写成「遍历按数组顺序」，是个会误导人的说法。
+
+def set_inject_order(root: Path, paths: list[str]) -> dict:
+    """按给定顺序把 inject.order 的 priority 重写成 1..N。
+
+    只许改顺序，不许增删条目：集合和现在完全一致才放行。用「不能加条目」
+    换掉「手滑清空 order 导致注入消失」——后者是灾难，前者只是不方便。
+    """
+    if not isinstance(paths, list) or not paths:
+        raise ValueError("order 必须是非空数组")
+    if not all(isinstance(p, str) and p.strip() for p in paths):
+        raise ValueError("order 里只能是非空字符串")
+    if len(set(paths)) != len(paths):
+        raise ValueError("order 里有重复的路径")
+
+    cfg = _read_config_strict(root)
+    inject = cfg.get("inject")
+    order = inject.get("order") if isinstance(inject, dict) else None
+    if not isinstance(order, list) or not order:
+        raise ValueError("config.json 里没有 inject.order，先跑 init 补默认值")
+    for e in order:
+        if not isinstance(e, dict) or not isinstance(e.get("path"), str):
+            raise ValueError("inject.order 里有格式不对的条目，先手改 JSON")
+
+    have = [e["path"] for e in order]
+    if len(set(have)) != len(have):
+        raise ValueError("现有 inject.order 自己就有重复路径，先手改 JSON")
+    if set(have) != set(paths):
+        missing = sorted(set(have) - set(paths))
+        extra = sorted(set(paths) - set(have))
+        raise ValueError(
+            "注入条目不能增删，只能调顺序"
+            + (f"；缺了：{'、'.join(missing)}" if missing else "")
+            + (f"；多了：{'、'.join(extra)}" if extra else "")
+        )
+
+    by_path = {e["path"]: e for e in order}
+    moved = sum(1 for i, p in enumerate(paths, 1) if by_path[p].get("priority") != i)
+    inject["order"] = [dict(by_path[p], priority=i) for i, p in enumerate(paths, 1)]
+    if moved:
+        _write_config(root, cfg)
+    return {"order": list(paths), "moved": moved}
+
+
+def cmd_checkup(root: Path, all_projects: bool = False, do_fix: bool = False,
+                dry: bool = False) -> int:
     """体检。输出问题清单，最后给「最该做的三件事」。文本和以前逐字一致。"""
+    if do_fix and all_projects:
+        print("--fix 只作用于当前记忆库；--all 是只读扫描，不跨册执行修复。")
+        return 2
+    if do_fix:
+        kinds = sorted({
+            p["fix"]["kind"] for p in collect_checkup(root)["problems"]
+            if isinstance(p.get("fix"), dict)
+        })
+        if not kinds:
+            print("没有可机械修复的项。")
+            return 0
+        res = apply_fixes(root, kinds, dry=dry)
+        for a in res["applied"]:
+            mark = "（预演）" if dry else ""
+            print(f"  {mark}{FIX_LABELS[a['kind']]}：{a['detail']}")
+        for s in res["skipped"]:
+            print(f"  跳过 {s['kind']}：{s['why']}")
+        if dry:
+            print("\n（--dry：什么都没写）")
+            return 0
+        print(f"\n修完还剩 {res['remaining']} 条问题。\n")
+
     r = collect_checkup(root, all_projects)
     print(f"记忆库：{r['root']}")
     if r["logScan"]:
@@ -2808,7 +3022,7 @@ def main(argv: list[str]) -> int:
     if cmd == "status":
         return cmd_status_all(root) if "--all" in argv else cmd_status(root)
     if cmd == "checkup":
-        return cmd_checkup(root, "--all" in argv)
+        return cmd_checkup(root, "--all" in argv, "--fix" in argv, "--dry" in argv)
     if cmd == "index":
         return cmd_index(root, "--write" in argv)
     if cmd == "workspaces":

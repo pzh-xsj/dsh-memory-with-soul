@@ -5,6 +5,17 @@
 <title>记忆库设置</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="style.css">
+<script>
+/* 主题必须在样式表之前定下来：等 CSS 加载完再改 data-theme，会先闪一帧白底。
+   ?theme=light|dark 只在本次生效、不落盘（给截图和临时看一眼用）；否则读上次的选择。 */
+(function () {
+  var q = new URLSearchParams(location.search).get("theme");
+  var saved = null;
+  try { saved = localStorage.getItem("memory-ui-theme"); } catch (e) { /* 隐私模式 */ }
+  document.documentElement.dataset.theme =
+    q === "light" || q === "dark" ? q : saved === "light" ? "light" : "dark";
+})();
+</script>
 </head>
 <body>
 
@@ -16,6 +27,7 @@
   </div>
   <div class="conn">
     <span id="modeBadge" class="badge">未连接</span>
+    <button id="themeBtn" class="ghost" title="切换主题">☀</button>
     <button id="pickBtn" class="ghost" title="用浏览器目录授权做自由文本编辑">连接本地目录…</button>
   </div>
 </header>
@@ -232,9 +244,10 @@
 <section id="tab-checkup" class="tab">
   <div class="card">
     <h2>体检 <span class="sub">和 <code>python core/memory.py checkup</code> 同一份判断</span></h2>
-    <p class="hint">这里只读服务端算出来的结果，不在前端重写规则——上一版就是抄了一份，架构一变就全错。</p>
+    <p class="hint">这里只读服务端算出来的结果，不在前端重写规则——上一版就是抄了一份，架构一变就全错。标了「修复」的那几行是确定性的机械问题：先备份再改，修完重新体检。</p>
     <div class="actions" style="margin-top:0">
-      <button class="primary" id="ckRun">重新体检</button>
+      <button id="ckRun">重新体检</button>
+      <button class="primary" id="ckFix" disabled title="只修确定性的四类：索引同步、IDENTITY 合并、关掉没用上的 sync、删未知配置键">修可修的 0 项</button>
       <label class="hint" style="display:flex;gap:6px;align-items:center">
         <input type="checkbox" id="ckAll"> 扫所有登记的项目册
       </label>
@@ -309,9 +322,15 @@
   </div>
 
   <div class="card">
-    <h2>注入顺序 <span class="sub">只读</span></h2>
-    <p class="hint">这是 <code>config.json</code> 里 <code>inject.order</code> 的实际内容，按优先级排。改顺序要手改 JSON——顺序错了注入内容会整个错位，不适合在网页上点。</p>
+    <h2>注入顺序 <span class="sub">上移 / 下移，保存后下一次会话生效</span></h2>
+    <p class="hint">改的是每个条目的 <code>priority</code>——注入按它排序，数组顺序不影响结果。条目本身不能在这里增删：<code>maxChars</code>、<code>tailLines</code>、<code>required</code> 这些语义参数仍只读；删掉一条会让注入内容整个错位。</p>
     <div id="cfgOrder"><p class="empty">—</p></div>
+    <div class="actions">
+      <button id="orderSave" disabled>保存顺序</button>
+      <button id="orderRevert" disabled>放弃顺序</button>
+      <div class="spacer"></div>
+      <span class="hint" id="orderHint"></span>
+    </div>
   </div>
 
   <div class="actions">
@@ -347,6 +366,29 @@ if (new URLSearchParams(location.search).has("embed")) {
 
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+/* 主题开关：只换根节点上的 data-theme，不碰任何数据路径。
+   ?theme= 是本次强制（截图、临时看一眼），点了也不落盘。 */
+const THEME_FORCED = ["light", "dark"].includes(new URLSearchParams(location.search).get("theme"));
+
+function applyTheme(name, persist) {
+  document.documentElement.dataset.theme = name;
+  const dark = name !== "light";
+  const btn = $("#themeBtn");
+  if (btn) {
+    btn.textContent = dark ? "☀" : "☾";
+    btn.title = `当前${dark ? "纯黑" : "亮色"}，点击切到${dark ? "亮色" : "纯黑"}`;
+  }
+  if (persist) {
+    try { localStorage.setItem("memory-ui-theme", dark ? "dark" : "light"); } catch (e) { /* 隐私模式 */ }
+  }
+}
+
+$("#themeBtn").addEventListener("click", () => {
+  applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light", !THEME_FORCED);
+});
+
+applyTheme(document.documentElement.dataset.theme === "light" ? "light" : "dark", false);
 
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
@@ -400,6 +442,11 @@ const S = {
   project: "",
   meta: null,
   checkup: null,
+  checkupAll: false,     // 体检是不是「扫所有项目册」——那种模式只读
+  fixable: [],           // 体检里带 fix 的行
+  fixing: false,         // 修复请求在途
+  order: [],             // 服务端给的 order，已按 priority 排好
+  orderDraft: [],        // 页面上拖动中的顺序；保存前不动服务端
   dirty: new Map(),      // panel -> true
   loaded: new Set(),
 };
@@ -410,6 +457,7 @@ const PANEL_NAMES = {
   user: "用户档案",
   meta: "项目册元信息",
   config: "设置",
+  order: "注入顺序",
 };
 
 function markDirty(panel, on) {
@@ -1550,20 +1598,26 @@ async function loadCheckup() {
     return;
   }
   S.checkup = data;
+  S.checkupAll = $("#ckAll").checked;
+  const fixable = (data.problems || []).filter((p) => p.fix);
+  S.fixable = fixable;
   $("#ckExport").disabled = false;
 
   const counts = data.counts || {};
   const total = (data.problems || []).length;
-  $("#ckSummary").textContent = total
+  $("#ckSummary").textContent = (total
     ? `发现 ${total} 个问题：严重 ${counts["严重"] || 0} · 该修 ${counts["该修"] || 0} · 建议 ${counts["建议"] || 0}`
+    : "没有发现问题。")
     + ` · 日志扫描 ${(data.logScan || []).join("、") || "无"}`
-    : `没有发现问题。日志扫描 ${(data.logScan || []).join("、") || "无"}`;
+    + (fixable.length ? ` · 其中 ${fixable.length} 个可机械修` : "")
+    + (S.checkupAll ? " · 扫别的项目册时只读" : "");
 
   body.replaceChildren();
   if (total) {
     body.append(h("table", {},
       h("thead", {}, h("tr", {},
-        h("th", { text: "级别" }), h("th", { text: "对象" }), h("th", { text: "问题" }), h("th", { text: "怎么办" }))),
+        h("th", { text: "级别" }), h("th", { text: "对象" }), h("th", { text: "问题" }),
+        h("th", { text: "怎么办" }), h("th", { text: "动作" }))),
       h("tbody", {}, (data.problems || []).map((p) => h("tr", {},
         h("td", {}, h("span", {
           class: "badge " + (p.level === 1 ? "err" : p.level === 2 ? "warn" : ""),
@@ -1571,7 +1625,13 @@ async function loadCheckup() {
         })),
         h("td", { class: "mono", text: p.object }),
         h("td", { text: p.desc }),
-        h("td", { class: "path", text: p.action }))))));
+        h("td", { class: "path", text: p.action }),
+        h("td", {}, p.fix
+          ? h("button", {
+            class: "small", text: "修复", "data-kind": p.fix.kind,
+            title: "只修这一条：先备份再写，修完重新体检",
+          })
+          : h("span", { class: "hint", text: "—" })))))));
     if (data.topActions && data.topActions.length) {
       body.append(h("h3", { text: "最该做的三件事", style: "margin-top:16px" }));
       body.append(h("ol", { class: "plain" }, data.topActions.map((t) => h("li", { text: `${t.action}（${t.object}）` }))));
@@ -1593,6 +1653,7 @@ async function loadCheckup() {
         h("td", { text: s.kind === "stale" ? `${s.days} 天未读` : "从未记录过访问" }))))));
     sbox.append(h("p", { class: "hint", text: "只是候选，不是结论。没被读不等于没用——禁区、注意事项本来就很少被单独打开。" }));
   }
+  refreshButtons();
 }
 
 $("#ckRun").addEventListener("click", async () => { await loadCheckup(); toast("已重新体检"); });
@@ -1603,6 +1664,36 @@ $("#ckExport").addEventListener("click", () => {
   const a = h("a", { href: URL.createObjectURL(blob), download: "memory-checkup.json" });
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+
+/* 修复：单条点也行，顶部按钮一次提交所有能修的。页面不判断「该不该修」——
+   哪些是机械问题由服务端的 checkup 决定，这里只负责把 kind 转交过去。 */
+async function runFix(kinds) {
+  if (!S.server || S.checkupAll || S.fixing || !kinds || !kinds.length) return;
+  S.fixing = true;
+  refreshButtons();
+  try {
+    const res = await api("/api/checkup", { method: "POST", body: { kinds } });
+    for (const a of res.applied || []) toast((a.ok ? "已修：" : "没修成：") + a.detail, !a.ok);
+    for (const s of res.skipped || []) toast(`跳过 ${s.kind}：${s.why}`, true);
+    if (S.server) { S.overview = null; S.loaded.delete("overview"); }
+    await loadCheckup();
+    if (res.clean) toast("体检通过");
+  } catch (e) {
+    toast("修复失败：" + e.message, true);
+  } finally {
+    S.fixing = false;
+    refreshButtons();
+  }
+}
+
+$("#ckFix").addEventListener("click", () => {
+  runFix([...new Set((S.fixable || []).map((p) => p.fix.kind))]);
+});
+
+$("#ckBody").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-kind]");
+  if (b) runFix([b.dataset.kind]);
 });
 
 /* ================================================================ 设置 */
@@ -1645,6 +1736,43 @@ function fillConfigInputs(cfg, defaults) {
   }
 }
 
+/* ---------------------------------------------------------------- 注入顺序 */
+
+/* 条目上的语义标记：只显示，不可编辑。改这些要动 config.json 本身。 */
+function orderFlags(o) {
+  return [
+    o.required ? "required" : "",
+    o.route ? "route" : "",
+    o.tailLines ? `tail ${o.tailLines}` : "",
+    o.countOnly ? "countOnly" : "",
+  ].filter(Boolean).join(" · ");
+}
+
+function renderOrder() {
+  const box = $("#cfgOrder");
+  const order = S.orderDraft || [];
+  box.replaceChildren();
+  if (!order.length) {
+    box.append(h("p", { class: "empty", text: "order 是空的——一个文件都不会注入" }));
+    return;
+  }
+  const arrow = (label, i, dir, disabled) => h("button", {
+    class: "ghost small", text: label, disabled,
+    "data-idx": String(i), "data-dir": dir,
+    title: dir === "up" ? "往前挪一位" : "往后挪一位",
+  });
+  box.append(h("table", {},
+    h("thead", {}, h("tr", {},
+      h("th", { text: "#" }), h("th", { text: "path" }), h("th", { text: "标记" }),
+      h("th", { text: "上移" }), h("th", { text: "下移" }))),
+    h("tbody", {}, order.map((o, i) => h("tr", {},
+      h("td", { class: "num", text: String(i + 1) }),
+      h("td", { class: "path", text: o.path }),
+      h("td", { text: orderFlags(o) }),
+      h("td", {}, arrow("↑", i, "up", i === 0)),
+      h("td", {}, arrow("↓", i, "down", i === order.length - 1)))))));
+}
+
 async function loadConfigForm() {
   const hint = $("#cfgHint");
   if (!S.server) {
@@ -1660,26 +1788,15 @@ async function loadConfigForm() {
   markDirty("config", false);
   hint.textContent = data.exists ? `读自 ${data.path}` : "config.json 不存在，保存会新建（值来自内置默认）";
 
+  // 按 priority 显示，而不是按数组下标：真正决定输出顺序的是 priority，
+  // 数组顺序只影响遍历。让页面显示的就是实际会发生的事。
   const order = (data.config.inject && data.config.inject.order) || [];
-  const box = $("#cfgOrder");
-  box.replaceChildren();
-  if (!order.length) {
-    box.append(h("p", { class: "empty", text: "order 是空的——一个文件都不会注入" }));
-    return;
-  }
-  box.append(h("table", {},
-    h("thead", {}, h("tr", {},
-      h("th", { text: "#" }), h("th", { text: "path" }), h("th", { text: "优先级" }), h("th", { text: "标记" }))),
-    h("tbody", {}, order.map((o, i) => h("tr", {},
-      h("td", { class: "num", text: String(i + 1) }),
-      h("td", { class: "path", text: o.path }),
-      h("td", { class: "num", text: String(o.priority == null ? "" : o.priority) }),
-      h("td", { text: [
-        o.required ? "required" : "",
-        o.route ? "route" : "",
-        o.tailLines ? `tail ${o.tailLines}` : "",
-        o.countOnly ? "countOnly" : "",
-      ].filter(Boolean).join(" · ") }))))));
+  const pri = (o) => (o.priority == null ? Number.MAX_SAFE_INTEGER : o.priority);
+  S.order = order.slice().sort((a, b) => pri(a) - pri(b));
+  S.orderDraft = S.order.map((o) => ({ ...o }));
+  renderOrder();
+  markDirty("order", false);
+  $("#orderHint").textContent = order.length ? "改完点「保存顺序」；下一次会话生效" : "";
 }
 
 $("#cfgReload").addEventListener("click", async () => {
@@ -1705,6 +1822,43 @@ Object.values(CFG_INPUTS).forEach((sel) => {
   el.addEventListener("change", () => markDirty("config", true));
 });
 
+$("#cfgOrder").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-dir]");
+  if (!b || !S.orderDraft) return;
+  const i = Number(b.dataset.idx);
+  const j = i + (b.dataset.dir === "up" ? -1 : 1);
+  if (j < 0 || j >= S.orderDraft.length) return;
+  const arr = S.orderDraft;
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  renderOrder();
+  markDirty("order", true);
+  refreshButtons();
+});
+
+$("#orderSave").addEventListener("click", async () => {
+  if (!S.orderDraft || !S.orderDraft.length) return;
+  try {
+    const paths = S.orderDraft.map((o) => o.path);
+    const res = await api("/api/config", { method: "POST", body: { order: paths } });
+    S.order = paths.map((p, i) => ({ ...S.orderDraft[i], path: p, priority: i + 1 }));
+    S.orderDraft = S.order.map((o) => ({ ...o }));
+    renderOrder();
+    markDirty("order", false);
+    toast(res.moved ? `顺序已保存（挪了 ${res.moved} 条），下一次会话生效` : "顺序没变化");
+    if (S.server) { S.overview = null; S.loaded.delete("overview"); }
+  } catch (e) {
+    toast("保存顺序失败：" + e.message, true);
+  }
+});
+
+$("#orderRevert").addEventListener("click", () => {
+  if (!S.order) return;
+  S.orderDraft = S.order.map((o) => ({ ...o }));
+  renderOrder();
+  markDirty("order", false);
+  toast("已放弃顺序改动");
+});
+
 /* ================================================================ 按钮联动 / 快捷键 */
 
 function refreshButtons() {
@@ -1720,6 +1874,12 @@ function refreshButtons() {
   $("#userAddSection").disabled = !S.user;
   $("#pmSave").disabled = !(S.server && S.project && S.meta);
   $("#cfgSave").disabled = !S.server;
+  const orderDirty = !!S.dirty.get("order");
+  $("#orderSave").disabled = !(S.server && orderDirty);
+  $("#orderRevert").disabled = !orderDirty;
+  const fixable = (S.fixable || []).length;
+  $("#ckFix").textContent = `修可修的 ${fixable} 项`;
+  $("#ckFix").disabled = !(S.server && !S.fixing && !S.checkupAll && fixable > 0);
   markDirty();
 }
 
@@ -1731,7 +1891,10 @@ function saveActive() {
   else if (name === "persona") {
     if (S.dirty.get("soul")) $("#soulSave").click();
     else if (S.dirty.get("meta")) $("#pmSave").click();
-  } else if (name === "config") $("#cfgSave").click();
+  } else if (name === "config") {
+    if (S.dirty.get("order")) $("#orderSave").click();
+    else $("#cfgSave").click();
+  }
 }
 
 document.addEventListener("keydown", (e) => {

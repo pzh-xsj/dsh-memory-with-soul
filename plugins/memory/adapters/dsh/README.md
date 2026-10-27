@@ -20,7 +20,7 @@ Web 界面 → 左侧栏 **插件** → **添加插件** 旁的箭头 → **选�
 ```bash
 node smoke.mjs          # 17/17：清单、模块加载、v4 来源准入、渲染器四关、路由表、左侧栏
 node test.mjs           # 10/10：用假宿主验三条接线（注入 / track / digest）
-node web.test.mjs       # 35/35：内置设置页的十条路由（入口层 + 真起 python 打每条路由）
+node web.test.mjs       # 39/39：内置设置页的十条路由（入口层 + 真起 python 打每条路由）
 ```
 
 `test.mjs` 不启动 DSH，也不需要 python 真的跑完——`ctx.subprocess` 被换成记录器，只断言

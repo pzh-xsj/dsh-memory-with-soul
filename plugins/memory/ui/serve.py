@@ -10,11 +10,15 @@
    UI 时的唯一硬约束**——上一版把体检逻辑抄进前端，架构一改（拆掉
    `shared/domains`）就全坏了，页面还在报一个不存在的「分册」。
 
-写入只有两条，都是「结构化、白名单、先备份」：
+写入只有四条，都是「结构化、白名单、先备份」：
 
   POST /api/project-meta   改项目册 `_meta.md` 的 status / kind / title /
                            「## 定位」/「## 注意事项」三块
-  POST /api/config         改 `config.json` 的白名单键，其余键原样保留
+  POST /api/config         改 `config.json` 的白名单键，其余键原样保留；
+                           带 `order` 时改注入顺序（只调 priority，不许增删条目）
+  POST /api/checkup        **执行修复**：`{"kinds": [...], "dry": bool}`，
+                           只做体检里标了 `fix` 的四类机械问题，不收命令字符串
+  POST /api/persona /file  整份覆盖 SOUL.md 与任意 `.md`（带 mtime 冲突检测）
 
 自由文本（SOUL、任意 md）的编辑仍然走浏览器的目录授权，服务端不碰——给前端
 一个通用写接口就等于给了它改任何文件的权力，收益不值这个风险。
@@ -498,13 +502,20 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         parsed = urlparse(self.path)
         root = self.root
-        if parsed.path not in {"/api/project-meta", "/api/config", "/api/soul",
-                               "/api/persona", "/api/file"}:
+        if parsed.path not in {"/api/project-meta", "/api/config", "/api/checkup",
+                               "/api/soul", "/api/persona", "/api/file"}:
             return self._error(404, f"没有这个接口：{parsed.path}")
         try:
             data = self._body()
             if parsed.path == "/api/config":
+                # 两条通道共用一条路由：带 order 走「只调顺序」，其余走白名单键。
+                # CONFIG_RULES 故意不收 inject.order——那里放行等于允许清空注入。
+                if "order" in data:
+                    return self._ok(mem.set_inject_order(root, data.get("order")))
                 return self._ok(apply_config_patch(root, data.get("patch") or data))
+            if parsed.path == "/api/checkup":
+                return self._ok(mem.apply_fixes(
+                    root, data.get("kinds") or [], dry=bool(data.get("dry"))))
             if parsed.path == "/api/soul":
                 return self._ok(write_soul(
                     root, str(data.get("agent", "")), data.get("text", ""), data.get("mtime")))
@@ -578,8 +589,8 @@ def self_test(root: Path) -> int:
     # 1. 静态文件不再引用已拆掉的 shared/domains
     html = (HERE / "settings.html").read_text(encoding="utf-8")
     check("settings.html 不引用 shared/domains", "shared/domains" not in html)
-    check("五个页签都在", all(f'data-tab="{t}"' in html
-                              for t in ("overview", "memory", "persona", "checkup", "config")))
+    check("六个页签都在", all(f'data-tab="{t}"' in html
+                              for t in ("overview", "memory", "persona", "user", "checkup", "config")))
 
     # 样式表注释漏一个 */ 会把后面几十条规则整段吞掉（踩过：卡片全变白底无边框，页面看着像没加载样式）
     css = (HERE / "style.css").read_text(encoding="utf-8")
@@ -792,6 +803,95 @@ def self_test(root: Path) -> int:
 
         code, data = _post(f"{base}/api/config", {"patch": {"inject": {"order": []}}})
         check("非白名单键被忽略", code == 200 and data.get("changed") == [], f"{code}")
+
+        # 6. 一键修：HTTP 只验拒绝路径（写路径在临时根上验，别拿真库当试验田）
+        code, data = _post(f"{base}/api/checkup", {"kinds": ["bogus"]})
+        check("修复杂项被拒（400）", code == 400, f"{code} {data.get('error', '')}")
+
+        order_paths = [e.get("path") for e in view_config(root)["config"].get("inject", {}).get("order", [])
+                       if e.get("path")]
+        if order_paths:
+            code, _ = _post(f"{base}/api/config", {"order": order_paths[:-1]})
+            check("顺序少一条被拒（400）", code == 400, f"{code}")
+            code, _ = _post(f"{base}/api/config", {"order": [order_paths[0]] * len(order_paths)})
+            check("顺序重复被拒（400）", code == 400, f"{code}")
+
+        # 7. 修复与重排在临时根上跑：索引漂移 → 修完手写行还在；priority 连续编号
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp) / "mem"
+            (troot / "shared").mkdir(parents=True)
+            ws = Path(tmp) / "ws"
+            (ws / ".memory").mkdir(parents=True)
+            (ws / ".memory" / "_meta.md").write_text(
+                "---\nid: fixme\ntitle: 自检修复\nstatus: 进行中\nkind: engineering\n---\n\n## 定位\n\n自检。\n",
+                encoding="utf-8")
+            mem.write_workspaces(troot, [{"id": "fixme", "path": ws.as_posix()}])
+            idx = troot / "shared" / "index.md"
+            idx.write_text(
+                "# 索引\n\n## 项目册（事实源）\n\n| 工作区 | 册子 | 装什么 |\n| --- | --- | --- |\n"
+                "| `E:/hand/written` | 手写行 | 别删 |\n\n"
+                "## playbooks\n\n| 文件 | 装什么 | 何时读 |\n| --- | --- | --- |\n\n"
+                "## topics\n\n| 文件 | 装什么 | 何时读 |\n| --- | --- | --- |\n",
+                encoding="utf-8")
+            tcfg = json.loads(json.dumps(mem.CONFIG_DEFAULTS))
+            tcfg["sync"]["enabled"] = True
+            tcfg["legacyKey"] = 1
+            tcfg["inject"]["order"] = [
+                {"path": "a.md", "priority": 5},
+                {"path": "b.md", "priority": 3},
+                {"path": "c.md", "priority": 9, "required": True},
+            ]
+            (troot / "config.json").write_text(
+                json.dumps(tcfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            mtime_before = idx.stat().st_mtime_ns
+            dry = mem.apply_fixes(troot, ["index_sync", "config_sync_off"], dry=True)
+            check("--dry 不动文件",
+                  idx.stat().st_mtime_ns == mtime_before and bool(dry.get("applied"))
+                  and str(dry["applied"][0].get("detail", "")).startswith("将执行"),
+                  f"{dry.get('applied')}")
+            res = mem.apply_fixes(troot, ["index_sync", "config_sync_off", "config_drop_unknown"])
+            text = idx.read_text(encoding="utf-8")
+            saved = json.loads((troot / "config.json").read_text(encoding="utf-8"))
+            check("修索引：补上项目册行、手写行保留",
+                  ws.as_posix() in text and "E:/hand/written" in text,
+                  f"{len(res.get('applied') or [])} 项")
+            check("修配置：sync 关掉、未知键删掉",
+                  saved["sync"]["enabled"] is False and "legacyKey" not in saved)
+
+            mem.set_inject_order(troot, ["c.md", "a.md", "b.md"])
+            saved = json.loads((troot / "config.json").read_text(encoding="utf-8"))
+            got = [(e["path"], e["priority"]) for e in saved["inject"]["order"]]
+            check("重排后 priority = 1..N", got == [("c.md", 1), ("a.md", 2), ("b.md", 3)], str(got))
+            check("重排保留 required 等标记", saved["inject"]["order"][0].get("required") is True)
+            for bad_paths, why in ((["c.md", "a.md"], "缺"), (["c.md", "a.md", "b.md", "d.md"], "多"),
+                                   (["a.md", "a.md", "b.md"], "重复")):
+                try:
+                    mem.set_inject_order(troot, bad_paths)
+                    check(f"顺序{why}被拒", False, "居然放过了")
+                except ValueError:
+                    check(f"顺序{why}被拒", True)
+
+        # 8. 两套主题必须覆盖同一组变量，且 token 区之外不许有颜色字面量
+        css = (Path(__file__).parent / "style.css").read_text(encoding="utf-8")
+
+        def _token_block(marker: str) -> str:
+            i = css.index(marker)
+            return css[i:css.index("}", i)]
+
+        def _var_names(block: str) -> set:
+            return set(re.findall(r"(--[a-z0-9-]+)\s*:", block))
+
+        dark_names = _var_names(_token_block(":root {"))
+        light_names = _var_names(_token_block(':root[data-theme="light"] {'))
+        check("亮色覆盖了所有主题变量", dark_names == light_names,
+              f"暗色 {len(dark_names)} 个 vs 亮色 {len(light_names)} 个")
+
+        stripped = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+        stripped = stripped.replace(_token_block(":root {"), "")
+        stripped = stripped.replace(_token_block(':root[data-theme="light"] {'), "")
+        literals = re.findall(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", stripped)
+        check("token 区之外没有颜色字面量", not literals, ", ".join(literals[:5]))
     finally:
         httpd.shutdown()
         httpd.server_close()

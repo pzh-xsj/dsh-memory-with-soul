@@ -4,7 +4,7 @@
 为什么不是常驻服务：内置进 DSH 后，页面已经挂在宿主自己的端口下，再起一个
 127.0.0.1:8765 就只是把旧方案藏在后面——多一个进程、多一个端口、多一处
 生命周期要管。`ui/serve.py` 仍然保留：它给「不想装 DSH」的场景用，而且自检
-（24 项）跑在它身上。
+（`python ui/serve.py --self-test`）跑在它身上。
 
 两个入口共用同一批函数（`view_*` / `apply_*`），不各自实现一遍——这是
 2026-10-27 修 UI 时定下的硬约束：判定只许有一份。
@@ -22,8 +22,8 @@
   overview [--cwd DIR] [--agent ID]
   tree
   file --path REL [--write body]
-  config [body]
-  checkup [--all]
+  config [body]                带 order 改注入顺序，否则改白名单键
+  checkup [--all]              加 --write 时执行修复（body: kinds/dry）
   project-meta [--path WS] [body]
   soul body
   persona body
@@ -97,10 +97,16 @@ def dispatch(name: str, argv: list[str]) -> tuple[int, dict]:
                 body.get("text", ""), body.get("mtime"))
         return 200, serve.view_file(root, flag(argv, "--path") or "")
     if name == "checkup":
+        if flag(argv, "--write") is not None:
+            body = read_body(argv)
+            return 200, mem.apply_fixes(
+                root, body.get("kinds") or [], dry=bool(body.get("dry")))
         return 200, mem.collect_checkup(root, all_projects=flag(argv, "--all") in ("1", "true", "yes"))
     if name == "config":
         if flag(argv, "--write") is not None:
             body = read_body(argv)
+            if "order" in body:
+                return 200, mem.set_inject_order(root, body.get("order"))
             return 200, serve.apply_config_patch(root, body.get("patch") or body)
         return 200, serve.view_config(root)
     if name == "project-meta":
