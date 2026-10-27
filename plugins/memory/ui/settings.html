@@ -479,7 +479,14 @@ async function api(path, opts) {
   let data = {};
   try { data = await res.json(); } catch (e) { /* 非 JSON 就是服务端挂了 */ }
   if (!res.ok || data.ok === false) {
-    const err = new Error(data.error || `HTTP ${res.status}`);
+    // 写端点返回 404 几乎只有一种原因：宿主里没有这条路由。
+    // 页面每次请求都现读磁盘，路由表却只在插件加载时注册一次 ——
+    // 所以「界面已经是新的、保存还是 404」= 插件换了代码但宿主没重启。
+    // 不说这句，这个现象只能靠看源码猜。
+    const hint = res.status === 404 && opts.method && opts.method !== "GET"
+      ? "（宿主里没有这条路由：页面是现读磁盘的，路由在插件加载时注册一次 —— 重启 DSH 后生效）"
+      : "";
+    const err = new Error((data.error || `HTTP ${res.status}`) + hint);
     err.code = data.code || "";
     err.status = res.status;
     throw err;
