@@ -33,6 +33,7 @@
   <button data-tab="overview" class="active">概览</button>
   <button data-tab="memory">记忆</button>
   <button data-tab="persona">人格</button>
+  <button data-tab="user">用户</button>
   <button data-tab="checkup">体检</button>
   <button data-tab="config">设置</button>
 </nav>
@@ -140,48 +141,22 @@
 <!-- ------------------------------------------------------------ 人格 -->
 <section id="tab-persona" class="tab">
   <div class="card">
-    <h2>Agent <span class="sub">下面三块都按这个 agent 读写</span></h2>
+    <h2>Agent <span class="sub">人格按这个 agent 读写</span></h2>
     <div class="row">
       <label>Agent</label>
       <select id="agentSelect"><option value="">（未加载）</option></select>
     </div>
-    <p class="hint">身份与称呼读 <code>IDENTITY.md</code>，人格读 <code>SOUL.md</code>；两个文件都由服务端整份写回，写前备份到 <code>.state/ui-backups</code>。</p>
+    <p class="hint">只有 <code>SOUL.md</code> 一个文件：身份与称呼已经并进来。两行字段是机器读的（宿主与插件按 <code>name:</code> 取值），下面的小节是正文。保存时写整份文件，写前备份到 <code>.state/ui-backups</code>。</p>
   </div>
 
   <div class="card">
-    <h2>身份 <span class="sub">IDENTITY.md · 我是谁</span></h2>
-    <p class="hint">四个字段是机器读的（宿主与插件按 <code>- **Name:**</code> 这种行取），下面按小节编辑。身份和称呼在同一个文件里，保存任意一块都会写整份。</p>
+    <h2>人格 <span class="sub">SOUL.md · 我是谁，以及怎么说话</span></h2>
     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px">
-      <div class="row"><label for="idName">Name</label><input type="text" id="idName" disabled></div>
-      <div class="row"><label for="idCreature">Creature</label><input type="text" id="idCreature" disabled></div>
-      <div class="row"><label for="idVibe">Vibe</label><input type="text" id="idVibe" disabled></div>
-      <div class="row"><label for="idEmoji">Emoji</label><input type="text" id="idEmoji" disabled></div>
+      <div class="row"><label for="soulName">name · 名字</label><input type="text" id="soulName" placeholder="摩羯" disabled></div>
+      <div class="row"><label for="soulIdentity">identity · 身份</label><input type="text" id="soulIdentity" placeholder="半个秘书，半个参谋" disabled></div>
     </div>
-    <div id="identityEditor" style="margin-top:12px"><p class="empty">—</p></div>
-    <p class="hint" id="ownerLine" hidden></p>
-    <div class="actions">
-      <button class="primary" id="identitySave" disabled>保存身份</button>
-      <button id="identityReload" disabled>重新加载</button>
-      <div class="spacer"></div>
-      <span class="hint" id="identityHint"></span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>称呼 <span class="sub">IDENTITY.md · 双向</span></h2>
-    <p class="hint">两条都写：一条是我怎么称呼主人，一条是主人怎么称呼我。保存在下面这块的按钮上，写的是整份 IDENTITY.md。</p>
-    <div id="addressEditor"><p class="empty">—</p></div>
-    <div class="actions">
-      <button class="primary" id="addressSave" disabled>保存称呼</button>
-      <div class="spacer"></div>
-      <span class="hint" id="addressHint"></span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>人格 <span class="sub">SOUL.md，按小节编辑</span></h2>
-    <p class="hint">每段对应 SOUL.md 的一个 <code>##</code> 小节，保存时按原顺序拼回，小节之外的内容不动。</p>
-    <div id="soulEditor" style="margin-top:10px"><p class="empty">—</p></div>
+    <p class="hint">这两行是 frontmatter，改完点「保存人格」一起写回。身份一句话说清「我是干什么的」，别写成简历。</p>
+    <div id="soulEditor" style="margin-top:14px"><p class="empty">—</p></div>
     <div class="actions">
       <button class="primary" id="soulSave" disabled>保存人格</button>
       <button id="soulReload" disabled>重新加载</button>
@@ -238,6 +213,22 @@
 </section>
 
 <!-- ------------------------------------------------------------ 体检 -->
+<!-- ------------------------------------------------------------ 用户 -->
+<section id="tab-user" class="tab">
+  <div class="card">
+    <h2>用户档案 <span class="sub">shared/user/profile.md</span></h2>
+    <p class="hint">每行都是 <code>- **键**：值</code> 的小节按字段编辑（可加行、删行）；其余小节是自由文本。保存写整份文件，写前备份。</p>
+    <div id="userEditor"><p class="empty">—</p></div>
+    <div class="actions">
+      <button class="primary" id="userSave" disabled>保存档案</button>
+      <button id="userReload" disabled>重新加载</button>
+      <button id="userAddSection" class="ghost" disabled>+ 加一节</button>
+      <div class="spacer"></div>
+      <span class="hint" id="userHint"></span>
+    </div>
+  </div>
+</section>
+
 <section id="tab-checkup" class="tab">
   <div class="card">
     <h2>体检 <span class="sub">和 <code>python core/memory.py checkup</code> 同一份判断</span></h2>
@@ -403,8 +394,8 @@ const S = {
   agent: "",
   ovAgent: "",           // 概览页预演用的身份，和人格页的选择互不影响
   cwd: new URLSearchParams(location.search).get("cwd") || "",   // 预演目录，来自 ?cwd=
-  soul: null,            // { head, sections: [{title, body}], raw, mtime }
-  identity: null,        // 同上，文件是 IDENTITY.md
+  soul: null,            // { head, fields, sections, raw, mtime }
+  user: null,            // 用户档案 profile.md，同上
   openDirs: new Map(),   // 目录 path -> 是否展开；搜索期间不写，清空后恢复手选
   project: "",
   meta: null,
@@ -416,7 +407,7 @@ const S = {
 const PANEL_NAMES = {
   memory: "记忆文件",
   soul: "人格",
-  identity: "身份与称呼",
+  user: "用户档案",
   meta: "项目册元信息",
   config: "设置",
 };
@@ -624,6 +615,7 @@ async function showTab(name) {
     overview: loadOverview,
     memory: loadMemory,
     persona: loadPersona,
+    user: loadUser,
     checkup: loadCheckup,
     config: loadConfigForm,
   }[name];
@@ -1042,7 +1034,55 @@ $$("#memChips .chip").forEach((chip) => {
   });
 });
 
-/* ================================================================ 人格：SOUL */
+/* ================================================================ 人格：SOUL 的字段行与整份合成 */
+
+// SOUL.md 的 frontmatter 只有两行是机器读的。Emoji 2026-10-27 删除：
+// 它零引用，而且等宽字体下 ♑ 会渲染成方框。
+const SOUL_FIELDS = [
+  ["soulName", "name"],
+  ["soulIdentity", "identity"],
+];
+
+/** 从 head 区取 `name: 摩羯` 这类字段。取不到给空串，不动原文。 */
+function parseSoulFields(head) {
+  const out = {};
+  for (const [, key] of SOUL_FIELDS) {
+    const m = head.match(new RegExp(`^${key}:\\s*(.*)$`, "m"));
+    out[key] = m ? m[1].trim() : "";
+  }
+  return out;
+}
+
+/** 只替换已存在的键。原文没有这个键就不新加——模板归模板，别自作主张。 */
+function applySoulFields(head, values) {
+  let out = head;
+  for (const [, key] of SOUL_FIELDS) {
+    const value = values[key];
+    if (value == null) continue;
+    const re = new RegExp(`^(${key}:\\s*).*$`, "m");
+    if (!re.test(out)) continue;
+    out = out.replace(re, (_, prefix) => prefix + String(value).trim());
+  }
+  return out;
+}
+
+/** 字段输入 + 各节 textarea 合成整份 SOUL.md。段数对不上返回 null。 */
+function soulTextFromDom() {
+  const st = S.soul;
+  if (!st) return null;
+  const tas = [...$("#soulEditor").querySelectorAll("textarea[data-index]")]
+    .sort((a, b) => Number(a.dataset.index) - Number(b.dataset.index));
+  if (tas.length !== st.sections.length) return null;
+  const values = {};
+  for (const [id, key] of SOUL_FIELDS) {
+    const el = $("#" + id);
+    if (el && !el.disabled) values[key] = el.value;
+  }
+  return buildSoul(
+    applySoulFields(st.head, values),
+    st.sections.map((s, i) => ({ title: s.title, body: tas[i].value })),
+  );
+}
 
 function parseSoul(md) {
   const lines = md.split("\n");
@@ -1079,16 +1119,12 @@ async function loadPersona() {
   if (S.server && !S.overview) await loadOverview();
   await loadAgentList();
   await loadSoul();
-  await loadIdentity();
-  await loadOwnerLine();
   await loadProjectList();
 }
 
 async function loadPersonaLocal() {
   await loadAgentList();
   await loadSoul();
-  await loadIdentity();
-  await loadOwnerLine();
 }
 
 async function loadAgentList() {
@@ -1140,21 +1176,22 @@ async function loadSoul() {
       return;
     }
     const parsed = parseSoul(text);
-    S.soul = { head: parsed.head, sections: parsed.sections, raw: text, mtime, path };
+    const fields = parseSoulFields(parsed.head);
+    S.soul = { head: parsed.head, fields, sections: parsed.sections, raw: text, mtime, path };
+    for (const [id, key] of SOUL_FIELDS) {
+      const el = $("#" + id);
+      el.value = fields[key];
+      el.disabled = false;
+    }
     box.replaceChildren();
     if (!parsed.sections.length) {
       box.append(h("p", { class: "empty", text: "这个文件没有 ## 小节，无法分段编辑" }));
       return;
     }
     parsed.sections.forEach((s, i) => {
-      const ta = h("textarea", { "data-index": i, style: "min-height:120px" });
+      const ta = h("textarea", { "data-index": String(i), style: "min-height:120px" });
       ta.value = s.body.replace(/^\n+/, "").replace(/\s+$/, "");
-      ta.addEventListener("input", () => {
-        const next = buildSoul(S.soul.head, [...box.querySelectorAll("textarea")].map((t, j) => ({
-          title: S.soul.sections[j].title, body: t.value,
-        })));
-        markDirty("soul", next !== S.soul.raw);
-      });
+      ta.addEventListener("input", () => markDirty("soul", soulTextFromDom() !== S.soul.raw));
       box.append(h("div", { style: "margin-bottom:16px" },
         h("div", { style: "font-size:12.5px;color:var(--muted);margin-bottom:6px", text: s.title }), ta));
     });
@@ -1165,23 +1202,27 @@ async function loadSoul() {
   refreshButtons();
 }
 
+// 字段行改了也算未保存：只改 name/identity 时也得按 Ctrl+S 能存
+for (const [id] of SOUL_FIELDS) {
+  $("#" + id).addEventListener("input", () => {
+    if (S.soul) markDirty("soul", soulTextFromDom() !== S.soul.raw);
+  });
+}
+
 $("#agentSelect").addEventListener("change", async (e) => {
   S.agent = e.target.value;
   await loadSoul();
-  await loadIdentity();
 });
 
 $("#soulReload").addEventListener("click", loadSoul);
 
 $("#soulSave").addEventListener("click", async () => {
   if (!S.soul) return;
-  const box = $("#soulEditor");
-  const tas = [...box.querySelectorAll("textarea")];
-  if (tas.length !== S.soul.sections.length) {
+  const next = soulTextFromDom();
+  if (next == null) {
     toast("段落数量对不上，可能文件被改过，请重新加载", true);
     return;
   }
-  const next = buildSoul(S.soul.head, S.soul.sections.map((s, i) => ({ title: s.title, body: tas[i].value })));
   try {
     if (S.server) {
       const res = await api("/api/persona", {
@@ -1192,7 +1233,14 @@ $("#soulSave").addEventListener("click", async () => {
     } else {
       await writeViaPicker(S.soul.path, next);
     }
-    S.soul.raw = next;
+    const parsed = parseSoul(next);
+    S.soul = {
+      ...S.soul,
+      head: parsed.head,
+      fields: parseSoulFields(parsed.head),
+      sections: parsed.sections,
+      raw: next,
+    };
     markDirty("soul", false);
     toast("人格已保存");
     refreshButtons();
@@ -1201,190 +1249,176 @@ $("#soulSave").addEventListener("click", async () => {
   }
 });
 
-/* ================================================================ 人格：身份与称呼 */
+/* ================================================================ 用户档案：profile.md */
 
-const ID_FIELDS = [
-  ["idName", "Name"],
-  ["idCreature", "Creature"],
-  ["idVibe", "Vibe"],
-  ["idEmoji", "Emoji"],
-];
+const PROFILE_PATH = "shared/user/profile.md";
+const KV_LINE_RE = /^[-*]\s*\*\*(.+?)\*\*\s*[：:]\s*(.*)$/;
 
-/** 从 head 区取 `- **Name:** 摩羯` 这类字段。取不到给空串，不动原文。 */
-function parseIdFields(head) {
-  const out = {};
-  for (const [, key] of ID_FIELDS) {
-    const m = head.match(new RegExp(`^[-*]\\s*\\*\\*${key}:\\*\\*\\s*(.*)$`, "m"));
-    out[key] = m ? m[1].trim() : "";
+/** 一节是不是「键值表单」：非空行全都长得像 `- **键**：值`，且值不长。
+
+    长句塞进单行输入框里只能左右滚动，改起来比 textarea 难受——值平均超过
+    60 字就整节退回自由文本。
+*/
+function isFieldSection(body) {
+  const lines = body.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return false;
+  if (!lines.every((l) => KV_LINE_RE.test(l))) return false;
+  const total = lines.reduce((n, l) => n + (l.match(KV_LINE_RE)[2] || "").length, 0);
+  return total / lines.length <= 60;
+}
+
+function parseFieldRows(body) {
+  const out = [];
+  for (const line of body.split("\n")) {
+    const m = line.trim().match(KV_LINE_RE);
+    if (m) out.push([m[1].trim(), m[2].trim()]);
   }
   return out;
 }
 
-/** 只替换已存在的字段行。原文没有这个字段就不新加——模板归模板，别自作主张。 */
-function applyIdFields(head, values) {
-  let out = head;
-  for (const [, key] of ID_FIELDS) {
-    const value = values[key];
-    if (value == null) continue;
-    const re = new RegExp(`^([-*]\\s*\\*\\*${key}:\\*\\*\\s*).*$`, "m");
-    if (!re.test(out)) continue;
-    out = out.replace(re, (_, prefix) => prefix + String(value).trim());
-  }
-  return out;
-}
-
-/** 身份、称呼两个卡片的输入合成整份 IDENTITY.md。段数对不上返回 null。 */
-function identityTextFromDom() {
-  const st = S.identity;
-  if (!st) return null;
-  const tas = [...document.querySelectorAll("textarea[data-ident]")]
-    .sort((a, b) => Number(a.dataset.ident) - Number(b.dataset.ident));
-  if (tas.length !== st.sections.length) return null;
-  const values = {};
-  for (const [id, key] of ID_FIELDS) {
-    const el = $("#" + id);
-    if (el && !el.disabled) values[key] = el.value;
-  }
-  return buildSoul(
-    applyIdFields(st.head, values),
-    st.sections.map((s, i) => ({ title: s.title, body: tas[i].value })),
-  );
-}
-
-function renderIdentity() {
-  const idBox = $("#identityEditor");
-  const adBox = $("#addressEditor");
-  idBox.replaceChildren();
-  adBox.replaceChildren();
-  const st = S.identity;
-  if (!st) return;
-
-  const fields = parseIdFields(st.head);
-  for (const [id, key] of ID_FIELDS) {
-    const el = $("#" + id);
-    el.value = fields[key];
-    el.disabled = false;
-  }
-  if (!st.sections.length) {
-    idBox.append(h("p", { class: "empty", text: "IDENTITY.md 里没有 ## 小节，无法分段编辑" }));
-    adBox.append(h("p", { class: "empty", text: "—" }));
-    return;
-  }
-
-  const onEdit = () => {
-    const next = identityTextFromDom();
-    markDirty("identity", next != null && next !== st.raw);
-  };
-  st.sections.forEach((s, i) => {
-    const ta = h("textarea", { "data-ident": String(i), style: "min-height:110px" });
-    ta.value = s.body.replace(/^\n+/, "").replace(/\s+$/, "");
-    ta.addEventListener("input", onEdit);
-    const wrap = h("div", { style: "margin-bottom:16px" },
-      h("div", { style: "font-size:12.5px;color:var(--muted);margin-bottom:6px", text: s.title }), ta);
-    // 「称呼」单拎到第二张卡：它讲的是双向称呼，不是「我是谁」
-    (s.title === "称呼" ? adBox : idBox).append(wrap);
+function kvRow(key, value) {
+  const row = h("div", { class: "kv-row" },
+    h("input", { type: "text", class: "k", placeholder: "键", value: key || "" }),
+    h("input", { type: "text", class: "v", placeholder: "值", value: value || "" }),
+    h("button", { class: "del-row ghost", type: "button", text: "×" }));
+  row.querySelector(".del-row").addEventListener("click", () => {
+    row.remove();
+    onUserEdit();
   });
-  if (!st.sections.some((s) => s.title === "称呼")) {
-    adBox.append(h("p", { class: "empty", text: "IDENTITY.md 里没有「## 称呼」小节；先在人格页加一节，或跑 memory checkup" }));
-  }
+  row.querySelectorAll("input").forEach((el) => el.addEventListener("input", onUserEdit));
+  return row;
 }
 
-async function loadIdentity() {
-  const idBox = $("#identityEditor");
-  const adBox = $("#addressEditor");
-  const path = S.agent ? `agents/${S.agent}/IDENTITY.md` : "";
-  $("#identityHint").textContent = "";
-  if (!path) {
-    S.identity = null;
-    idBox.replaceChildren(h("p", { class: "empty", text: "没有可编辑的 agent" }));
-    adBox.replaceChildren(h("p", { class: "empty", text: "—" }));
-    refreshButtons();
+function sectionBox(title, body) {
+  const box = h("div", { class: "user-sec" });
+  const titleInput = h("input", { type: "text", class: "sec-title", value: title });
+  titleInput.addEventListener("input", onUserEdit);
+  const head = h("div", { class: "sec-head" }, titleInput,
+    h("button", { class: "del-sec ghost", type: "button", text: "删除本节" }));
+  head.querySelector(".del-sec").addEventListener("click", () => {
+    box.remove();
+    onUserEdit();
+  });
+  box.append(head);
+
+  const bodyBox = h("div", { class: "sec-body" });
+  if (isFieldSection(body) || !body.trim()) {
+    for (const [k, v] of parseFieldRows(body)) bodyBox.append(kvRow(k, v));
+    const add = h("button", { class: "add-row ghost", type: "button", text: "+ 加一行" });
+    add.addEventListener("click", () => {
+      bodyBox.insertBefore(kvRow("", ""), add);
+      onUserEdit();
+    });
+    bodyBox.append(add);
+  } else {
+    const ta = h("textarea", { style: "min-height:130px" });
+    ta.value = body.replace(/^\n+/, "").replace(/\s+$/, "");
+    ta.addEventListener("input", onUserEdit);
+    bodyBox.append(ta);
+  }
+  box.append(bodyBox);
+  return box;
+}
+
+function userTextFromDom() {
+  const st = S.user;
+  if (!st) return null;
+  const secs = [...$("#userEditor").querySelectorAll(".user-sec")].map((box) => {
+    const title = box.querySelector(".sec-title").value.trim();
+    const ta = box.querySelector("textarea");
+    if (ta) return { title, body: ta.value };
+    const rows = [...box.querySelectorAll(".kv-row")].map((r) => {
+      const k = r.querySelector(".k").value.trim();
+      const v = r.querySelector(".v").value.trim();
+      return k ? `- **${k}**：${v}` : "";
+    }).filter(Boolean);
+    return { title, body: rows.join("\n") };
+  }).filter((s) => s.title);
+  if (!secs.length) return null;
+  return buildSoul(st.head, secs);
+}
+
+function onUserEdit() {
+  const next = userTextFromDom();
+  markDirty("user", next != null && next !== S.user.raw);
+}
+
+function renderUser() {
+  const box = $("#userEditor");
+  box.replaceChildren();
+  const st = S.user;
+  if (!st) return;
+  if (!st.sections.length) {
+    box.append(h("p", { class: "empty", text: "这个文件没有 ## 小节，这里没法编辑" }));
     return;
   }
-  idBox.replaceChildren(h("p", { class: "empty", text: "加载中…" }));
+  for (const s of st.sections) box.append(sectionBox(s.title, s.body));
+}
+
+async function loadUser() {
+  const box = $("#userEditor");
+  $("#userHint").textContent = "";
+  box.replaceChildren(h("p", { class: "empty", text: "加载中…" }));
   try {
-    let text;
-    let mtime = 0;
+    let text, mtime = 0;
     if (S.server) {
-      const data = await api("/api/file?path=" + encodeURIComponent(path));
-      text = data.text;
-      mtime = data.mtime;
+      const data = await api("/api/file?path=" + encodeURIComponent(PROFILE_PATH));
+      text = data.text; mtime = data.mtime;
     } else if (S.handle) {
-      const r = await readViaPicker(path);
-      text = r.text;
-      mtime = r.mtime;
+      const r = await readViaPicker(PROFILE_PATH);
+      text = r.text; mtime = r.mtime;
     } else {
-      throw new Error("连上服务端或本地目录才能读");
+      box.replaceChildren(h("p", { class: "empty", text: "连上服务端或本地目录才能读用户档案" }));
+      return;
     }
     const parsed = parseSoul(text);
-    S.identity = { head: parsed.head, sections: parsed.sections, raw: text, mtime, path };
-    renderIdentity();
-    markDirty("identity", false);
+    S.user = { head: parsed.head, sections: parsed.sections, raw: text, mtime, path: PROFILE_PATH };
+    renderUser();
+    markDirty("user", false);
   } catch (e) {
-    S.identity = null;
-    idBox.replaceChildren(h("p", { class: "empty", text: `读不到 ${path}：${e.message}` }));
-    adBox.replaceChildren(h("p", { class: "empty", text: "—" }));
+    box.replaceChildren(h("p", { class: "empty", text: `读不到 ${PROFILE_PATH}：${e.message}` }));
   }
   refreshButtons();
 }
 
-async function saveIdentity(kind) {
-  if (!S.identity) return;
-  const next = identityTextFromDom();
+$("#userReload").addEventListener("click", loadUser);
+
+$("#userAddSection").addEventListener("click", () => {
+  if (!S.user) return;
+  $("#userEditor").append(sectionBox("新小节", ""));
+  onUserEdit();
+});
+
+$("#userSave").addEventListener("click", async () => {
+  if (!S.user) return;
+  const next = userTextFromDom();
   if (next == null) {
-    toast("段落数量对不上，可能文件被改过，请重新加载", true);
+    toast("没有可保存的小节", true);
     return;
   }
   try {
-    let mtime = S.identity.mtime;
     if (S.server) {
-      const res = await api("/api/persona", {
+      const res = await api("/api/file", {
         method: "POST",
-        body: { agent: S.agent, file: "IDENTITY.md", text: next, mtime: S.identity.mtime },
+        body: { path: PROFILE_PATH, text: next, mtime: S.user.mtime },
       });
-      mtime = res.mtime;
+      S.user.mtime = res.mtime;
     } else if (S.handle) {
-      await writeViaPicker(S.identity.path, next);
-      const after = await readViaPicker(S.identity.path).catch(() => null);
-      mtime = after ? after.mtime : 0;
+      await writeViaPicker(PROFILE_PATH, next);
+      const after = await readViaPicker(PROFILE_PATH).catch(() => null);
+      S.user.mtime = after ? after.mtime : 0;
     } else {
       throw new Error("没连服务端也没连目录");
     }
     const parsed = parseSoul(next);
-    S.identity = { ...S.identity, head: parsed.head, sections: parsed.sections, raw: next, mtime };
-    markDirty("identity", false);
-    toast(kind === "address" ? "称呼已保存" : "身份已保存");
+    S.user = { ...S.user, head: parsed.head, sections: parsed.sections, raw: next };
+    markDirty("user", false);
+    toast("用户档案已保存");
     refreshButtons();
   } catch (e) {
     toast((e.code === "conflict" ? "文件被改过：" : "保存失败：") + e.message, true);
   }
-}
-
-/** 身份卡底部那行只读摘要：主人是谁，从 shared/user/profile.md 摘。 */
-async function loadOwnerLine() {
-  const el = $("#ownerLine");
-  el.hidden = true;
-  el.textContent = "";
-  if (!S.server || !S.overview) return;
-  try {
-    const data = await api("/api/file?path=" + encodeURIComponent("shared/user/profile.md"));
-    const pick = (key) => {
-      const m = data.text.match(new RegExp(`^[-*]\\s*\\*\\*${key}\\*\\*[：:]\\s*(.*)$`, "m"));
-      return m ? m[1].trim() : "";
-    };
-    const who = pick("称呼");
-    const what = pick("身份");
-    if (!who && !what) return;
-    el.textContent = `主人：${what ? what + " · " : ""}称呼「${who || "—"}」（只读，改在「记忆」页）`;
-    el.hidden = false;
-  } catch (e) {
-    /* 没有 profile.md 就整行不显示，不是错误 */
-  }
-}
-
-$("#identitySave").addEventListener("click", () => saveIdentity("identity"));
-$("#addressSave").addEventListener("click", () => saveIdentity("address"));
-$("#identityReload").addEventListener("click", loadIdentity);
+});
 
 /* ================================================================ 人格：项目册元信息 */
 
@@ -1678,12 +1712,12 @@ function refreshButtons() {
   const writable = S.server || !!S.handle;
   $("#memSave").disabled = !(hasFile && writable);
   $("#memRevert").disabled = !hasFile;
-  const identOk = !!(S.identity && S.identity.sections.length);
   $("#soulSave").disabled = !(S.soul && S.soul.sections.length);
   $("#soulReload").disabled = !S.agent;
-  $("#identitySave").disabled = !identOk;
-  $("#addressSave").disabled = !identOk;
-  $("#identityReload").disabled = !S.agent;
+  const userOk = !!(S.user && S.user.sections.length && writable);
+  $("#userSave").disabled = !userOk;
+  $("#userReload").disabled = !S.user;
+  $("#userAddSection").disabled = !S.user;
   $("#pmSave").disabled = !(S.server && S.project && S.meta);
   $("#cfgSave").disabled = !S.server;
   markDirty();
@@ -1693,9 +1727,9 @@ function saveActive() {
   const tab = $(".tabs button.active");
   const name = tab ? tab.dataset.tab : "";
   if (name === "memory") $("#memSave").click();
+  else if (name === "user") $("#userSave").click();
   else if (name === "persona") {
     if (S.dirty.get("soul")) $("#soulSave").click();
-    else if (S.dirty.get("identity")) $("#identitySave").click();
     else if (S.dirty.get("meta")) $("#pmSave").click();
   } else if (name === "config") $("#cfgSave").click();
 }

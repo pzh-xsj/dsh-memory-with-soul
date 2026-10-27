@@ -314,7 +314,9 @@ def apply_config_patch(root: Path, patch: dict) -> dict:
 AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 
-PERSONA_FILES = ("SOUL.md", "IDENTITY.md")
+# 2026-10-27 起人格只有 SOUL.md 一个文件：身份/称呼并进 SOUL，IDENTITY.md
+# 由 `memory.py persona --merge-identity` 收口。留着旧名会让 UI 以为还能写它。
+PERSONA_FILES = ("SOUL.md",)
 
 
 def persona_path(root: Path, agent: str, file: str = "SOUL.md") -> Path:
@@ -683,15 +685,20 @@ def self_test(root: Path) -> int:
         tmp_md = root / "shared" / "zz-selftest.md"
         try:
             tmp_agent.mkdir(parents=True, exist_ok=True)
-            ident = tmp_agent / "IDENTITY.md"
-            ident.write_text("# IDENTITY.md\n\n- **Name:** 自检\n", encoding="utf-8")
+            soul = tmp_agent / "SOUL.md"
+            soul.write_text("---\nname: 自检\n---\n\n# SOUL.md\n\n原文\n", encoding="utf-8")
             code, data = _post(f"{base}/api/persona", {
-                "agent": "zz-selftest", "file": "IDENTITY.md",
-                "text": "# IDENTITY.md\n\n- **Name:** 自检改\n",
-                "mtime": ident.stat().st_mtime})
+                "agent": "zz-selftest", "file": "SOUL.md",
+                "text": "---\nname: 自检改\n---\n\n# SOUL.md\n\n原文\n",
+                "mtime": soul.stat().st_mtime})
             check("POST /api/persona 正常保存",
-                  code == 200 and "自检改" in ident.read_text(encoding="utf-8"),
+                  code == 200 and "自检改" in soul.read_text(encoding="utf-8"),
                   f"{code} {data.get('error', '')}")
+
+            # IDENTITY.md 已退役：还能写它说明 PERSONA_FILES 没收窄
+            code, _ = _post(f"{base}/api/persona", {
+                "agent": "zz-selftest", "file": "IDENTITY.md", "text": "x"})
+            check("POST /api/persona 拒收 IDENTITY.md", code == 400, f"{code}")
 
             tmp_md.write_text("# 自检\n", encoding="utf-8")
             code, data = _post(f"{base}/api/file", {

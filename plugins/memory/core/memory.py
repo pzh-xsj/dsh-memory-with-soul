@@ -222,6 +222,26 @@ def write(path: Path, text: str) -> None:
         raise
 
 
+BACKUP_SUBDIR = Path(".state") / "ui-backups"
+
+
+def backup(path: Path, root: Path) -> Path | None:
+    """手动改文件前留一份。放 `.state/ui-backups`：那里已经在 .gitignore 里，
+    备份进 git 会让每次改动都多一个文件要提交，最后只会把 git 用废。
+    """
+    if not path.is_file():
+        return None
+    base = root if root in path.parents else path.parent
+    folder = base / BACKUP_SUBDIR
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    # 拍平成文件名：备份目录里不该按原路径再建一遍目录树
+    flat = str(path).replace("\\", "/").replace(":", "").replace("/", "__")
+    dest = folder / f"{flat}.{stamp}.bak"
+    shutil.copy2(path, dest)
+    return dest
+
+
 def parse_frontmatter(path: Path) -> dict:
     """解析文件头部的 --- 元信息。只支持 key: value 这种单行格式。
 
@@ -578,6 +598,22 @@ def _replace_section(body: str, title: str, inner: str) -> str:
     if after:
         out += "\n" + after + "\n"
     return out
+
+
+def _insert_section_before(body: str, title: str, before: str, inner: str) -> str:
+    """把一节插到 `## before` 之前；找不到锚点就退回追加到末尾。
+
+    `_replace_section` 只会改已有节或补在末尾。「称呼」落在「记忆」之后读着
+    别扭——顺序本身也是文档的一部分，所以合并时指定插入点。
+    """
+    lines = body.split("\n")
+    for i, line in enumerate(lines):
+        if line.strip() == f"## {before}":
+            head = "\n".join(lines[:i]).rstrip("\n")
+            tail = "\n".join(lines[i:])
+            block = f"## {title}\n\n{inner.strip()}\n"
+            return ((head + "\n\n" + block + "\n" + tail) if head else (block + "\n" + tail)).strip("\n") + "\n"
+    return _replace_section(body, title, inner)
 
 
 def _parse_note_blocks(inner: str) -> tuple[list[str], list[tuple[str, list[str]]]]:
@@ -1281,6 +1317,28 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
                     f"{n} 条结论未提炼（{why}）",
                     "提炼进对应文件，再在日志末尾补 `提炼：文件名` 或 `提炼：无（理由）`",
                 ))
+
+    # 0.5 人格：IDENTITY.md 时代的两条遗留。2026-10-27 起身份并进 SOUL，
+    # 旧的按 agent 分文件做法不该再有新文件长出来。
+    for name in list_agents(root):
+        agent_dir = root / "agents" / name
+        if (agent_dir / ".legacy").exists():
+            continue
+        soul_path = agent_dir / "SOUL.md"
+        soul_fm = _meta_parts(read(soul_path))[0] if soul_path.is_file() else ""
+        missing = [k for k in ("name", "identity") if not _fm_get(soul_fm, k)]
+        if missing:
+            problems.append((
+                3, f"agent {name}",
+                f"SOUL.md 缺字段：{'/'.join(missing)}",
+                "人格页可改，或手写 frontmatter——name / identity 是机器读的",
+            ))
+        if (agent_dir / "IDENTITY.md").is_file():
+            problems.append((
+                3, f"agent {name}",
+                "IDENTITY.md 还在，身份已并入 SOUL.md",
+                "跑 `persona --merge-identity` 收口，原文件会移到 archive/",
+            ))
 
     # 1. playbooks / topics 的元信息质量
     groups = [("playbooks", list_playbooks(root)), ("topics", list_topics(root))]
@@ -2143,11 +2201,16 @@ def cmd_timeline(root: Path, days: int = 30) -> int:
 # ---------------------------------------------------------------- 命令：init
 
 AGENT_TEMPLATES = {
-    # SOUL.md 的四节是「人格页」按节编辑的依据（ui/settings.html 的 parseSoul）：
-    # 原则讲怎么做事、沟通讲怎么说话（提问/语气是它的两个面）、禁区讲不碰什么、
-    # 记忆讲跨会话靠什么延续。新 agent 拿这个骨架填，别改节名。
+    # 2026-10-27 起一个人格只有 SOUL.md 一份：IDENTITY.md 并进来，机器读的两个
+    # 字段（name / identity）进 frontmatter，其余是正文小节。
+    #
+    # 五节是「人格页」按节编辑的依据（ui/settings.html 的 parseSoul）：原则讲怎么
+    # 做事、沟通讲怎么说话（提问/语气是它的两个面）、称呼讲怎么叫人、禁区讲不碰
+    # 什么、记忆讲跨会话靠什么延续。新 agent 拿这个骨架填，别改节名。
     "SOUL.md": """---
 title: SOUL
+name: {agent}
+identity: _待写：一句话说清这个 agent 是谁、负责什么_
 owner: user
 created: {today}
 updated: {today}
@@ -2165,26 +2228,11 @@ _（待写：这个 agent 的底色。改它要告诉主人。）_
 
 ### 语气
 
+## 称呼
+
 ## 禁区
 
 ## 记忆
-""",
-    "IDENTITY.md": """---
-title: IDENTITY
-owner: user
-created: {today}
-updated: {today}
----
-
-# IDENTITY.md - 我是谁
-
-- **Name:** {agent}
-- **Harness:** {harness}
-- **Vibe:** _待写_
-
----
-
-_一个 agent 一间房。`shared/` 全员可见，这里只放只对这个 agent 成立的东西。_
 """,
     # 2026-10-27 删掉 memory.md：标着 owner: auto 却没有任何生成器，注入排在
     # inject.order 第 8 位、每会话都进上下文，实际是两行有效内容的空模板。
@@ -2234,10 +2282,135 @@ def cmd_init_agent(root: Path, agent: str, source: str | None = None) -> int:
 
     print(f"已创建 agent：{folder}")
     if src:
-        print(f"SOUL / IDENTITY 复制自 {source}，末尾标了来源日期。")
+        print(f"SOUL 复制自 {source}，末尾标了来源日期。")
     else:
         print("SOUL 是空模板，下一步写它——人格是主人的地盘。")
     return 0
+
+
+# 旧 IDENTITY.md 的字段 → SOUL frontmatter 的键。Emoji 不在表里：2026-10-27 起删除，
+# 它零引用，而且等宽字体下 ♑ 会渲染成方框。
+IDENTITY_FIELD_MAP = [
+    ("Name", "name"),
+    ("Creature", "identity"),
+]
+
+# 旧 IDENTITY.md 的正文小节 → SOUL 的小节。前两个整节丢弃：
+# 「名字」讲字段的由来，「我怎么介绍自己」与 name/identity/roster 三处重叠。
+IDENTITY_SECTION_MAP = {"称呼": "称呼"}
+
+
+def _fm_get(fm_text: str, key: str) -> str:
+    """从 frontmatter 原文里取一个键。取不到给空串。"""
+    m = re.search(rf"^{re.escape(key)}:\s*(.*)$", fm_text, re.M)
+    return m.group(1).strip() if m else ""
+
+
+def merge_identity(root: Path, agent: str | None = None, dry: bool = False) -> int:
+    """把 agents/<id>/IDENTITY.md 并进同目录的 SOUL.md。
+
+    只搬不润色：字段按 IDENTITY_FIELD_MAP 进 frontmatter，正文按
+    IDENTITY_SECTION_MAP 搬到同名小节，其余整节丢弃（内容按判定树已归位）。
+    幂等：SOUL 已有该字段/该小节就跳过，可以反复跑。搬完原文件移 archive/，
+    不删——记忆库是主人的数据，git 之外还得留一份能直接翻的。
+    """
+    agents_dir = root / "agents"
+    if not agents_dir.is_dir():
+        print(f"没有 agents 目录：{agents_dir}")
+        return 1
+
+    targets = [agent] if agent else sorted(
+        p.name for p in agents_dir.iterdir()
+        if p.is_dir() and (p / "IDENTITY.md").is_file()
+    )
+    # 已废弃的 agent（有 .legacy 标记）只报不改
+    stale = [a for a in targets if (agents_dir / a / ".legacy").exists()]
+    targets = [a for a in targets if a not in stale]
+    if not targets:
+        print("没有需要合并的 IDENTITY.md。")
+        if stale:
+            print(f"跳过已废弃的 agent：{', '.join(stale)}")
+        return 0
+
+    archive = root / "archive" / f"agents-identity-{date.today().isoformat()}"
+    for name in targets:
+        ident_path = agents_dir / name / "IDENTITY.md"
+        soul_path = agents_dir / name / "SOUL.md"
+        ident = read(ident_path)
+        fm_text, body = _meta_parts(ident)
+
+        fields = {}
+        for old_key, new_key in IDENTITY_FIELD_MAP:
+            m = re.search(rf"^[-*]\s*\*\*{re.escape(old_key)}:\*\*\s*(.*)$", ident, re.M)
+            value = (m.group(1).strip() if m else "")
+            if value:
+                fields[new_key] = value
+
+        carried = []
+        for old_title, new_title in IDENTITY_SECTION_MAP.items():
+            inner = _section_inner(body, old_title)
+            if not inner:
+                continue
+            # 旧文件的小节取到文件尾，会连分隔线和尾注一起带出来，只留第一段
+            inner = inner.split("\n---")[0].strip()
+            if inner:
+                carried.append((new_title, inner))
+
+        if dry:
+            print(f"\n[{name}]")
+            print(f"  字段：{fields or '（无）'}")
+            print(f"  小节：{[t for t, _ in carried] or '（无）'}")
+            print(f"  归档：{archive / f'{name}-IDENTITY.md'}")
+            continue
+
+        if soul_path.is_file():
+            soul = read(soul_path)
+            backup(soul_path, root)
+        else:
+            soul = AGENT_TEMPLATES["SOUL.md"].format(
+                today=date.today().isoformat(), agent=name, harness=name.rsplit("-", 1)[-1]
+            )
+        soul_fm, soul_body = _meta_parts(soul)
+
+        changed = []
+        for key, value in fields.items():
+            if _fm_get(soul_fm, key):
+                continue
+            soul_fm = _set_fm(soul_fm if soul_fm else "---\n---", key, value)
+            changed.append(key)
+        for title, inner in carried:
+            if _section_inner(soul_body, title) is not None:
+                continue
+            soul_body = _insert_section_before(soul_body, title, "禁区", inner)
+            changed.append(f"## {title}")
+
+        soul_fm = _set_fm(soul_fm, "updated", date.today().isoformat())
+        write(soul_path, _join_meta(soul_fm, soul_body))
+
+        archive.mkdir(parents=True, exist_ok=True)
+        target = archive / f"{name}-IDENTITY.md"
+        if target.exists():
+            target = archive / f"{name}-IDENTITY-{datetime.now().strftime('%H%M%S')}.md"
+        shutil.move(str(ident_path), str(target))
+
+        print(f"[{name}] 合并完成：{', '.join(changed) if changed else '无变化'}")
+        print(f"  IDENTITY.md → {relative_to_root(root, target)}")
+
+    if dry:
+        print("\n（--dry：什么都没写）")
+    else:
+        print(f"\n归档目录：{relative_to_root(root, archive)}")
+    return 0
+
+
+def cmd_persona(root: Path, argv: list[str]) -> int:
+    """persona 子命令族。目前只有 --merge-identity。"""
+    agent = flag(argv, "--agent") or None
+    dry = "--dry" in argv
+    if "--merge-identity" in argv:
+        return merge_identity(root, agent, dry)
+    print("用法：persona --merge-identity [--agent <id>] [--dry]")
+    return 2
 
 
 PROJECT_META = """---
@@ -2649,6 +2822,8 @@ def main(argv: list[str]) -> int:
         return cmd_track(root, argv)
     if cmd == "skills":
         return cmd_skills(root, argv)
+    if cmd == "persona":
+        return cmd_persona(root, argv)
     if cmd == "init":
         if "--agent" in argv:
             agent = flag(argv, "--agent")

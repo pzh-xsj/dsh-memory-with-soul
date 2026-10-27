@@ -195,6 +195,26 @@ main section { scroll-margin-top: 110px; }   /* 吸顶头挡住锚点：标题�
 .section-title { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .section-title h3 { margin: 0; color: var(--fg); font-size: 13px; }
 
+/* 用户档案：可增删的节与键值行 */
+.user-sec { margin-bottom: 22px; }
+.sec-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.sec-head input.sec-title {
+  width: auto;
+  flex: 0 1 260px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-strong, var(--fg));
+  background: transparent;
+  border-color: transparent;
+  padding: 3px 6px;
+}
+.sec-head input.sec-title:hover { border-color: var(--line); }
+.sec-head input.sec-title:focus { background: var(--panel-2); border-color: var(--line); }
+.sec-head button.del-sec { margin-left: auto; font-size: 12px; padding: 3px 10px; }
+.kv-row { display: grid; grid-template-columns: 200px minmax(0, 1fr) 34px; gap: 10px; margin-bottom: 8px; }
+.kv-row button.del-row { padding: 0; font-size: 15px; line-height: 1; }
+.add-row { font-size: 12px; padding: 4px 12px; margin-top: 2px; }
+
 /* ---------------------------------------------------------------- 表单 */
 
 input[type=text],
@@ -203,6 +223,7 @@ input[type=search],
 select,
 textarea {
   width: 100%;
+  min-width: 0;   /* 网格里的长值会把 input 撑出卡片，靠这个压住 */
   background: var(--panel-2);
   color: var(--fg);
   border: 1px solid var(--line);

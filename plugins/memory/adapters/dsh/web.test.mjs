@@ -166,11 +166,14 @@ const post = async (key, payload) => {
   return { status: res.status, body: await res.json() }
 }
 
-const persona = await post('persona', { agent: 'moxie-dsh', file: 'IDENTITY.md', text: 'x', mtime: 1 })
+const persona = await post('persona', { agent: 'moxie-dsh', file: 'SOUL.md', text: 'x', mtime: 1 })
 check('persona 过期 mtime → 409', persona.status === 409, String(persona.status))
 
 const personaBad = await post('persona', { agent: 'moxie-dsh', file: '../../config.json', text: 'x' })
-check('persona 只认 SOUL/IDENTITY', personaBad.status === 400, `${personaBad.status} ${personaBad.body.error ?? ''}`)
+check('persona 只认 SOUL.md', personaBad.status === 400, `${personaBad.status} ${personaBad.body.error ?? ''}`)
+
+const personaOld = await post('persona', { agent: 'moxie-dsh', file: 'IDENTITY.md', text: 'x' })
+check('persona 拒收已退役的 IDENTITY.md', personaOld.status === 400, `${personaOld.status}`)
 
 const fileStale = await post('file', { path: 'shared/focus.md', text: 'x', mtime: 1 })
 check('file 过期 mtime → 409', fileStale.status === 409, String(fileStale.status))
