@@ -2,7 +2,7 @@
  * 内置设置页的回归测试。
  *
  * 分两层：
- * 1. **入口层**——用假 cordis ctx 跑 `apply()`，确认三条监听挂上、九条路由注册、
+ * 1. **入口层**——用假 cordis ctx 跑 `apply()`，确认三条监听挂上、十条路由注册、
  *    启动日志打出页面地址。这一层不碰 Python，跑得快。
  * 2. **接线层**——真起 `python ui/api.py` 打每一条路由，确认路径拼对、参数转对、
  *    错误翻成 4xx。这一层要 Python，约 3 秒。
@@ -82,7 +82,7 @@ check('apply 不抛错', threw === undefined, threw ?? '')
 check('挂了 agent/created', (ctx.listeners.get('agent/created')?.length ?? 0) === 1)
 check('挂了 agent/disposed', (ctx.listeners.get('agent/disposed')?.length ?? 0) === 1)
 check('挂了 session/event', (ctx.listeners.get('session/event')?.length ?? 0) === 2, String(ctx.listeners.get('session/event')?.length))
-check('注册了 9 条路由', ctx.routes.length === 9, String(ctx.routes.length))
+check('注册了 10 条路由', ctx.routes.length === 10, String(ctx.routes.length))
 check('路由都在 /api 下', ctx.routes.every((r) => r.path.startsWith('/api/')))
 check('启动日志打出页面地址', ctx.logs.some((l) => l.includes('/api/memory/ui')), ctx.logs.find((l) => l.includes('/api/memory/ui')) ?? '无')
 check('前缀是 /api/memory', API_PREFIX === '/api/memory', API_PREFIX)
@@ -158,10 +158,35 @@ const soul = await routes.get(`${API_PREFIX}/soul`).fetch(new Request(`http://12
 }))
 check('SOUL 过期 mtime → 409', soul.status === 409, String(soul.status))
 
+const post = async (key, payload) => {
+  const res = await routes.get(`${API_PREFIX}/${key}`).fetch(new Request(`http://127.0.0.1:1${API_PREFIX}/${key}`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }))
+  return { status: res.status, body: await res.json() }
+}
+
+const persona = await post('persona', { agent: 'moxie-dsh', file: 'IDENTITY.md', text: 'x', mtime: 1 })
+check('persona 过期 mtime → 409', persona.status === 409, String(persona.status))
+
+const personaBad = await post('persona', { agent: 'moxie-dsh', file: '../../config.json', text: 'x' })
+check('persona 只认 SOUL/IDENTITY', personaBad.status === 400, `${personaBad.status} ${personaBad.body.error ?? ''}`)
+
+const fileStale = await post('file', { path: 'shared/focus.md', text: 'x', mtime: 1 })
+check('file 过期 mtime → 409', fileStale.status === 409, String(fileStale.status))
+
+const fileType = await post('file', { path: 'config.json', text: '{}' })
+check('file 只允许写 .md', fileType.status === 400, `${fileType.status} ${fileType.body.error ?? ''}`)
+
+const fileEscape = await post('file', { path: '../../../../etc/passwd', text: 'x' })
+check('写越界路径被拒', fileEscape.status === 400 || fileEscape.status === 404, String(fileEscape.status))
+
 // methods 是声明，宿主据此分发；handler 自己不拒方法，所以断言声明
 check('tree 只声明 GET', String(routes.get(`${API_PREFIX}/tree`).methods) === 'GET', String(routes.get(`${API_PREFIX}/tree`).methods))
 check('soul 只声明 POST', String(routes.get(`${API_PREFIX}/soul`).methods) === 'POST')
 check('config 声明 GET,POST', String(routes.get(`${API_PREFIX}/config`).methods) === 'GET,POST')
+check('file 声明 GET,POST', String(routes.get(`${API_PREFIX}/file`).methods) === 'GET,POST', String(routes.get(`${API_PREFIX}/file`).methods))
+check('persona 只声明 POST', String(routes.get(`${API_PREFIX}/persona`).methods) === 'POST')
 check('全部路由都带 requestBody', [...routes.values()].every((r) => r.requestBody === 'buffered'))
 
 const failed = results.filter((r) => !r.ok)

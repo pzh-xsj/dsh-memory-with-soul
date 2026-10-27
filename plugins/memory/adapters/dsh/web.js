@@ -39,11 +39,12 @@ const ASSETS = [
 const ENDPOINTS = [
   { path: `${API_PREFIX}/overview`, api: 'overview', methods: ['GET'], query: ['cwd', 'agent'] },
   { path: `${API_PREFIX}/tree`, api: 'tree', methods: ['GET'], query: [] },
-  { path: `${API_PREFIX}/file`, api: 'file', methods: ['GET'], query: ['path'] },
+  { path: `${API_PREFIX}/file`, api: 'file', methods: ['GET', 'POST'], query: ['path'], write: true },
   { path: `${API_PREFIX}/config`, api: 'config', methods: ['GET', 'POST'], query: [], write: true },
   { path: `${API_PREFIX}/checkup`, api: 'checkup', methods: ['GET'], query: ['all'] },
   { path: `${API_PREFIX}/project-meta`, api: 'project-meta', methods: ['GET', 'POST'], query: ['path'], write: true },
   { path: `${API_PREFIX}/soul`, api: 'soul', methods: ['POST'], query: [], write: true },
+  { path: `${API_PREFIX}/persona`, api: 'persona', methods: ['POST'], query: [], write: true },
 ]
 
 function json(status, body) {

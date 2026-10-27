@@ -45,6 +45,13 @@
   <div class="card" id="ovIntro">
     <h2>连接 <span class="sub" id="ovMode"></span></h2>
     <p class="hint" id="ovHint">正在探测服务端…</p>
+    <div class="row">
+      <label>本地目录</label>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button id="pickBtnOv" class="ghost" title="用浏览器目录授权做自由文本编辑">连接本地目录…</button>
+        <span class="hint" id="ovPickHint" style="margin:0">没连也能改：记忆页保存走服务端。</span>
+      </div>
+    </div>
     <dl class="kv" id="ovKv"></dl>
   </div>
 
@@ -133,12 +140,47 @@
 <!-- ------------------------------------------------------------ 人格 -->
 <section id="tab-persona" class="tab">
   <div class="card">
-    <h2>人格 <span class="sub">SOUL.md，按小节编辑</span></h2>
-    <p class="hint">每段对应 SOUL.md 的一个 <code>##</code> 小节，保存时按原顺序拼回，小节之外的内容不动。</p>
+    <h2>Agent <span class="sub">下面三块都按这个 agent 读写</span></h2>
     <div class="row">
       <label>Agent</label>
       <select id="agentSelect"><option value="">（未加载）</option></select>
     </div>
+    <p class="hint">身份与称呼读 <code>IDENTITY.md</code>，人格读 <code>SOUL.md</code>；两个文件都由服务端整份写回，写前备份到 <code>.state/ui-backups</code>。</p>
+  </div>
+
+  <div class="card">
+    <h2>身份 <span class="sub">IDENTITY.md · 我是谁</span></h2>
+    <p class="hint">四个字段是机器读的（宿主与插件按 <code>- **Name:**</code> 这种行取），下面按小节编辑。身份和称呼在同一个文件里，保存任意一块都会写整份。</p>
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px">
+      <div class="row"><label for="idName">Name</label><input type="text" id="idName" disabled></div>
+      <div class="row"><label for="idCreature">Creature</label><input type="text" id="idCreature" disabled></div>
+      <div class="row"><label for="idVibe">Vibe</label><input type="text" id="idVibe" disabled></div>
+      <div class="row"><label for="idEmoji">Emoji</label><input type="text" id="idEmoji" disabled></div>
+    </div>
+    <div id="identityEditor" style="margin-top:12px"><p class="empty">—</p></div>
+    <p class="hint" id="ownerLine" hidden></p>
+    <div class="actions">
+      <button class="primary" id="identitySave" disabled>保存身份</button>
+      <button id="identityReload" disabled>重新加载</button>
+      <div class="spacer"></div>
+      <span class="hint" id="identityHint"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>称呼 <span class="sub">IDENTITY.md · 双向</span></h2>
+    <p class="hint">两条都写：一条是我怎么称呼主人，一条是主人怎么称呼我。保存在下面这块的按钮上，写的是整份 IDENTITY.md。</p>
+    <div id="addressEditor"><p class="empty">—</p></div>
+    <div class="actions">
+      <button class="primary" id="addressSave" disabled>保存称呼</button>
+      <div class="spacer"></div>
+      <span class="hint" id="addressHint"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>人格 <span class="sub">SOUL.md，按小节编辑</span></h2>
+    <p class="hint">每段对应 SOUL.md 的一个 <code>##</code> 小节，保存时按原顺序拼回，小节之外的内容不动。</p>
     <div id="soulEditor" style="margin-top:10px"><p class="empty">—</p></div>
     <div class="actions">
       <button class="primary" id="soulSave" disabled>保存人格</button>
@@ -362,6 +404,8 @@ const S = {
   ovAgent: "",           // 概览页预演用的身份，和人格页的选择互不影响
   cwd: new URLSearchParams(location.search).get("cwd") || "",   // 预演目录，来自 ?cwd=
   soul: null,            // { head, sections: [{title, body}], raw, mtime }
+  identity: null,        // 同上，文件是 IDENTITY.md
+  openDirs: new Map(),   // 目录 path -> 是否展开；搜索期间不写，清空后恢复手选
   project: "",
   meta: null,
   checkup: null,
@@ -372,6 +416,7 @@ const S = {
 const PANEL_NAMES = {
   memory: "记忆文件",
   soul: "人格",
+  identity: "身份与称呼",
   meta: "项目册元信息",
   config: "设置",
 };
@@ -517,7 +562,7 @@ async function attachHandle(handle, silent) {
   return true;
 }
 
-$("#pickBtn").addEventListener("click", async () => {
+async function pickDirectory() {
   if (!window.showDirectoryPicker) {
     toast("这个浏览器不支持文件访问，请用 Chrome / Edge 打开 http://localhost", true);
     return;
@@ -553,7 +598,11 @@ $("#pickBtn").addEventListener("click", async () => {
   } catch (e) {
     if (e.name !== "AbortError") toast("连接失败：" + e.message, true);
   }
-});
+}
+
+// 两处入口同一个处理函数：顶栏那个在 embed 里被收成窄条，概览卡那个是常驻的。
+$("#pickBtn").addEventListener("click", pickDirectory);
+$("#pickBtnOv").addEventListener("click", pickDirectory);
 
 /* ================================================================ 页签 */
 
@@ -794,6 +843,28 @@ async function loadMemory() {
   refreshButtons();
 }
 
+/** 扁平 path 列表折成树。渲染前建一次，不缓存——文件增删后重建最省心。 */
+function buildTree(files) {
+  const root = { path: "", name: "", dirs: new Map(), files: [] };
+  for (const f of files) {
+    const parts = f.path.split("/");
+    let node = root;
+    for (const part of parts.slice(0, -1)) {
+      if (!node.dirs.has(part)) {
+        node.dirs.set(part, {
+          path: node.path ? `${node.path}/${part}` : part,
+          name: part,
+          dirs: new Map(),
+          files: [],
+        });
+      }
+      node = node.dirs.get(part);
+    }
+    node.files.push(f);
+  }
+  return root;
+}
+
 function renderTree() {
   const box = $("#memTree");
   box.replaceChildren();
@@ -807,24 +878,42 @@ function renderTree() {
     box.append(h("p", { class: "empty", text: S.tree.length ? "没有匹配的文件" : "没有可读的 md 文件" }));
     return;
   }
-  const groups = new Map();
-  for (const f of files) {
-    const parts = f.path.split("/");
-    const key = parts.length > 1 ? parts[0] : "（根目录）";
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(f);
-  }
-  for (const [key, list] of groups) {
-    const details = h("details", { class: "group", open: true },
-      h("summary", { text: `${key} · ${list.length}` }),
-      h("div", { class: "body" }, list.map((f) => h("div", {
-        class: "list-item" + (S.file && S.file.path === f.path ? " active" : ""),
-        onclick: () => openMemoryFile(f.path),
-      },
-      h("span", { class: "name", text: f.path.split("/").slice(1).join("/") || f.path }),
-      h("span", { class: "meta", text: f.size ? `${(f.size / 1024).toFixed(1)} KB` : "" })))));
-    box.append(details);
-  }
+
+  const root = buildTree(files);
+  const byName = (a, b) => a.name.localeCompare(b.name, "zh");
+  const count = (node) => node.files.length
+    + [...node.dirs.values()].reduce((n, d) => n + count(d), 0);
+
+  const fileRow = (f) => h("div", {
+    class: "list-item" + (S.file && S.file.path === f.path ? " active" : ""),
+    onclick: () => openMemoryFile(f.path),
+  },
+  h("span", { class: "name", text: f.path.split("/").pop() }),
+  h("span", { class: "meta", text: f.size ? `${(f.size / 1024).toFixed(1)} KB` : "" }));
+
+  const dirNode = (node) => {
+    // 搜索时不认用户的展开态：命中的分支必须看得见；这一下也不写回 S.openDirs，
+    // 否则清空搜索后用户手选的展开状态就被搜索污染了。
+    const open = q !== "" || S.openDirs.get(node.path) === true;
+    const details = h("details", { class: "group" },
+      h("summary", { text: `${node.name} · ${count(node)}` }));
+    details.open = open;
+    details.addEventListener("toggle", () => {
+      if (q !== "") return;
+      S.openDirs.set(node.path, details.open);
+    });
+    const body = h("div", { class: "body" });
+    for (const dir of [...node.dirs.values()].sort(byName)) body.append(dirNode(dir));
+    for (const f of node.files.slice().sort((a, b) => a.path.localeCompare(b.path, "zh"))) {
+      body.append(fileRow(f));
+    }
+    details.append(body);
+    return details;
+  };
+
+  // 根级文件不套折叠壳：README.md 这类一进来就该看得见
+  for (const f of root.files.slice().sort((a, b) => a.path.localeCompare(b.path, "zh"))) box.append(fileRow(f));
+  for (const dir of [...root.dirs.values()].sort(byName)) box.append(dirNode(dir));
 }
 
 async function openMemoryFile(path) {
@@ -842,12 +931,16 @@ async function openMemoryFile(path) {
     $("#memPath").textContent = path;
     ta.value = text;
     markDirty("memory", false);
-    $("#memBadge").textContent = S.handle ? "可编辑" : "只读";
-    $("#memBadge").className = "badge " + (S.handle ? "ok" : "warn");
-    ta.disabled = !S.handle;
-    $("#memHint").textContent = S.handle
-      ? "写入走浏览器目录授权，服务端不碰自由文本"
-      : "没连目录：只能预览。要点「连接本地目录…」";
+    const writable = S.server || !!S.handle;
+    $("#memBadge").textContent = S.server ? "可编辑（服务端）" : (S.handle ? "可编辑（目录）" : "只读");
+    $("#memBadge").className = "badge " + (writable ? "ok" : "warn");
+    ta.disabled = !writable;
+    $("#memHint").textContent = S.server
+      ? "保存走服务端：写前备份到 .state/ui-backups，冲突会先问"
+      : (S.handle ? "保存走浏览器目录授权" : "没连服务端也没连目录：只能预览");
+    // 选中的文件要把祖先目录展开，否则它藏在折叠的目录里
+    const parts = path.split("/").slice(0, -1);
+    for (let i = 0; i < parts.length; i += 1) S.openDirs.set(parts.slice(0, i + 1).join("/"), true);
     renderTree();
     refreshButtons();
   } catch (e) {
@@ -884,18 +977,36 @@ function askOverwrite(msg) {
 
 $("#memSave").addEventListener("click", async () => {
   if (!S.file) return;
-  if (!S.handle) { toast("没连目录，写不了", true); return; }
+  if (!S.server && !S.handle) { toast("没连服务端也没连目录，写不了", true); return; }
+  const text = $("#memText").value;
   try {
+    let mtime = S.file.mtime;
     if (S.server) {
-      // 先在服务端取一次，确认这中间没别人改过
-      const latest = await api("/api/file?path=" + encodeURIComponent(S.file.path)).catch(() => null);
+      try {
+        const res = await api("/api/file", {
+          method: "POST",
+          body: { path: S.file.path, text, mtime: S.file.mtime },
+        });
+        mtime = res.mtime;
+      } catch (e) {
+        if (e.code !== "conflict") throw e;
+        if (!await askOverwrite("「" + S.file.path + "」在打开后被改过，覆盖会丢掉那次改动。")) return;
+        // 用户选了覆盖：这一次不带 mtime，服务端不再拦
+        const res = await api("/api/file", { method: "POST", body: { path: S.file.path, text } });
+        mtime = res.mtime;
+      }
+    } else {
+      // 目录模式下没有 mtime 校验的服务端兜底，先自己比一次
+      const latest = await readViaPicker(S.file.path).catch(() => null);
       if (latest && Math.abs(latest.mtime - S.file.mtime) > 0.001) {
         if (!await askOverwrite("「" + S.file.path + "」在打开后被改过，覆盖会丢掉那次改动。")) return;
       }
+      await writeViaPicker(S.file.path, text);
+      const after = await readViaPicker(S.file.path).catch(() => null);
+      mtime = after ? after.mtime : 0;
     }
-    const text = $("#memText").value;
-    await writeViaPicker(S.file.path, text);
     S.file.text = text;
+    S.file.mtime = mtime;
     markDirty("memory", false);
     toast("已保存");
     refreshButtons();
@@ -961,12 +1072,16 @@ async function loadPersona() {
   if (S.server && !S.overview) await loadOverview();
   await loadAgentList();
   await loadSoul();
+  await loadIdentity();
+  await loadOwnerLine();
   await loadProjectList();
 }
 
 async function loadPersonaLocal() {
   await loadAgentList();
   await loadSoul();
+  await loadIdentity();
+  await loadOwnerLine();
 }
 
 async function loadAgentList() {
@@ -1046,6 +1161,7 @@ async function loadSoul() {
 $("#agentSelect").addEventListener("change", async (e) => {
   S.agent = e.target.value;
   await loadSoul();
+  await loadIdentity();
 });
 
 $("#soulReload").addEventListener("click", loadSoul);
@@ -1061,7 +1177,10 @@ $("#soulSave").addEventListener("click", async () => {
   const next = buildSoul(S.soul.head, S.soul.sections.map((s, i) => ({ title: s.title, body: tas[i].value })));
   try {
     if (S.server) {
-      const res = await api("/api/soul", { method: "POST", body: { agent: S.agent, text: next, mtime: S.soul.mtime } });
+      const res = await api("/api/persona", {
+        method: "POST",
+        body: { agent: S.agent, file: "SOUL.md", text: next, mtime: S.soul.mtime },
+      });
       S.soul.mtime = res.mtime;
     } else {
       await writeViaPicker(S.soul.path, next);
@@ -1074,6 +1193,191 @@ $("#soulSave").addEventListener("click", async () => {
     toast((e.code === "conflict" ? "文件被改过：" : "保存失败：") + e.message, true);
   }
 });
+
+/* ================================================================ 人格：身份与称呼 */
+
+const ID_FIELDS = [
+  ["idName", "Name"],
+  ["idCreature", "Creature"],
+  ["idVibe", "Vibe"],
+  ["idEmoji", "Emoji"],
+];
+
+/** 从 head 区取 `- **Name:** 摩羯` 这类字段。取不到给空串，不动原文。 */
+function parseIdFields(head) {
+  const out = {};
+  for (const [, key] of ID_FIELDS) {
+    const m = head.match(new RegExp(`^[-*]\\s*\\*\\*${key}:\\*\\*\\s*(.*)$`, "m"));
+    out[key] = m ? m[1].trim() : "";
+  }
+  return out;
+}
+
+/** 只替换已存在的字段行。原文没有这个字段就不新加——模板归模板，别自作主张。 */
+function applyIdFields(head, values) {
+  let out = head;
+  for (const [, key] of ID_FIELDS) {
+    const value = values[key];
+    if (value == null) continue;
+    const re = new RegExp(`^([-*]\\s*\\*\\*${key}:\\*\\*\\s*).*$`, "m");
+    if (!re.test(out)) continue;
+    out = out.replace(re, (_, prefix) => prefix + String(value).trim());
+  }
+  return out;
+}
+
+/** 身份、称呼两个卡片的输入合成整份 IDENTITY.md。段数对不上返回 null。 */
+function identityTextFromDom() {
+  const st = S.identity;
+  if (!st) return null;
+  const tas = [...document.querySelectorAll("textarea[data-ident]")]
+    .sort((a, b) => Number(a.dataset.ident) - Number(b.dataset.ident));
+  if (tas.length !== st.sections.length) return null;
+  const values = {};
+  for (const [id, key] of ID_FIELDS) {
+    const el = $("#" + id);
+    if (el && !el.disabled) values[key] = el.value;
+  }
+  return buildSoul(
+    applyIdFields(st.head, values),
+    st.sections.map((s, i) => ({ title: s.title, body: tas[i].value })),
+  );
+}
+
+function renderIdentity() {
+  const idBox = $("#identityEditor");
+  const adBox = $("#addressEditor");
+  idBox.replaceChildren();
+  adBox.replaceChildren();
+  const st = S.identity;
+  if (!st) return;
+
+  const fields = parseIdFields(st.head);
+  for (const [id, key] of ID_FIELDS) {
+    const el = $("#" + id);
+    el.value = fields[key];
+    el.disabled = false;
+  }
+  if (!st.sections.length) {
+    idBox.append(h("p", { class: "empty", text: "IDENTITY.md 里没有 ## 小节，无法分段编辑" }));
+    adBox.append(h("p", { class: "empty", text: "—" }));
+    return;
+  }
+
+  const onEdit = () => {
+    const next = identityTextFromDom();
+    markDirty("identity", next != null && next !== st.raw);
+  };
+  st.sections.forEach((s, i) => {
+    const ta = h("textarea", { "data-ident": String(i), style: "min-height:110px" });
+    ta.value = s.body.replace(/^\n+/, "").replace(/\s+$/, "");
+    ta.addEventListener("input", onEdit);
+    const wrap = h("div", { style: "margin-bottom:16px" },
+      h("div", { style: "font-size:12.5px;color:var(--muted);margin-bottom:6px", text: s.title }), ta);
+    // 「称呼」单拎到第二张卡：它讲的是双向称呼，不是「我是谁」
+    (s.title === "称呼" ? adBox : idBox).append(wrap);
+  });
+  if (!st.sections.some((s) => s.title === "称呼")) {
+    adBox.append(h("p", { class: "empty", text: "IDENTITY.md 里没有「## 称呼」小节；先在人格页加一节，或跑 memory checkup" }));
+  }
+}
+
+async function loadIdentity() {
+  const idBox = $("#identityEditor");
+  const adBox = $("#addressEditor");
+  const path = S.agent ? `agents/${S.agent}/IDENTITY.md` : "";
+  $("#identityHint").textContent = "";
+  if (!path) {
+    S.identity = null;
+    idBox.replaceChildren(h("p", { class: "empty", text: "没有可编辑的 agent" }));
+    adBox.replaceChildren(h("p", { class: "empty", text: "—" }));
+    refreshButtons();
+    return;
+  }
+  idBox.replaceChildren(h("p", { class: "empty", text: "加载中…" }));
+  try {
+    let text;
+    let mtime = 0;
+    if (S.server) {
+      const data = await api("/api/file?path=" + encodeURIComponent(path));
+      text = data.text;
+      mtime = data.mtime;
+    } else if (S.handle) {
+      const r = await readViaPicker(path);
+      text = r.text;
+      mtime = r.mtime;
+    } else {
+      throw new Error("连上服务端或本地目录才能读");
+    }
+    const parsed = parseSoul(text);
+    S.identity = { head: parsed.head, sections: parsed.sections, raw: text, mtime, path };
+    renderIdentity();
+    markDirty("identity", false);
+  } catch (e) {
+    S.identity = null;
+    idBox.replaceChildren(h("p", { class: "empty", text: `读不到 ${path}：${e.message}` }));
+    adBox.replaceChildren(h("p", { class: "empty", text: "—" }));
+  }
+  refreshButtons();
+}
+
+async function saveIdentity(kind) {
+  if (!S.identity) return;
+  const next = identityTextFromDom();
+  if (next == null) {
+    toast("段落数量对不上，可能文件被改过，请重新加载", true);
+    return;
+  }
+  try {
+    let mtime = S.identity.mtime;
+    if (S.server) {
+      const res = await api("/api/persona", {
+        method: "POST",
+        body: { agent: S.agent, file: "IDENTITY.md", text: next, mtime: S.identity.mtime },
+      });
+      mtime = res.mtime;
+    } else if (S.handle) {
+      await writeViaPicker(S.identity.path, next);
+      const after = await readViaPicker(S.identity.path).catch(() => null);
+      mtime = after ? after.mtime : 0;
+    } else {
+      throw new Error("没连服务端也没连目录");
+    }
+    const parsed = parseSoul(next);
+    S.identity = { ...S.identity, head: parsed.head, sections: parsed.sections, raw: next, mtime };
+    markDirty("identity", false);
+    toast(kind === "address" ? "称呼已保存" : "身份已保存");
+    refreshButtons();
+  } catch (e) {
+    toast((e.code === "conflict" ? "文件被改过：" : "保存失败：") + e.message, true);
+  }
+}
+
+/** 身份卡底部那行只读摘要：主人是谁，从 shared/user/profile.md 摘。 */
+async function loadOwnerLine() {
+  const el = $("#ownerLine");
+  el.hidden = true;
+  el.textContent = "";
+  if (!S.server || !S.overview) return;
+  try {
+    const data = await api("/api/file?path=" + encodeURIComponent("shared/user/profile.md"));
+    const pick = (key) => {
+      const m = data.text.match(new RegExp(`^[-*]\\s*\\*\\*${key}\\*\\*[：:]\\s*(.*)$`, "m"));
+      return m ? m[1].trim() : "";
+    };
+    const who = pick("称呼");
+    const what = pick("身份");
+    if (!who && !what) return;
+    el.textContent = `主人：${what ? what + " · " : ""}称呼「${who || "—"}」（只读，改在「记忆」页）`;
+    el.hidden = false;
+  } catch (e) {
+    /* 没有 profile.md 就整行不显示，不是错误 */
+  }
+}
+
+$("#identitySave").addEventListener("click", () => saveIdentity("identity"));
+$("#addressSave").addEventListener("click", () => saveIdentity("address"));
+$("#identityReload").addEventListener("click", loadIdentity);
 
 /* ================================================================ 人格：项目册元信息 */
 
@@ -1363,12 +1667,16 @@ Object.values(CFG_INPUTS).forEach((sel) => {
 /* ================================================================ 按钮联动 / 快捷键 */
 
 function refreshButtons() {
-  const ed = !!S.handle;
   const hasFile = !!S.file;
-  $("#memSave").disabled = !(hasFile && ed);
+  const writable = S.server || !!S.handle;
+  $("#memSave").disabled = !(hasFile && writable);
   $("#memRevert").disabled = !hasFile;
+  const identOk = !!(S.identity && S.identity.sections.length);
   $("#soulSave").disabled = !(S.soul && S.soul.sections.length);
   $("#soulReload").disabled = !S.agent;
+  $("#identitySave").disabled = !identOk;
+  $("#addressSave").disabled = !identOk;
+  $("#identityReload").disabled = !S.agent;
   $("#pmSave").disabled = !(S.server && S.project && S.meta);
   $("#cfgSave").disabled = !S.server;
   markDirty();
@@ -1380,6 +1688,7 @@ function saveActive() {
   if (name === "memory") $("#memSave").click();
   else if (name === "persona") {
     if (S.dirty.get("soul")) $("#soulSave").click();
+    else if (S.dirty.get("identity")) $("#identitySave").click();
     else if (S.dirty.get("meta")) $("#pmSave").click();
   } else if (name === "config") $("#cfgSave").click();
 }

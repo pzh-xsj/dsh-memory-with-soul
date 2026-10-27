@@ -314,36 +314,80 @@ def apply_config_patch(root: Path, patch: dict) -> dict:
 AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 
-def soul_path(root: Path, agent: str) -> Path:
-    """人格文件路径。agent 必须过白名单，否则 `../` 能写到库外面去。"""
+PERSONA_FILES = ("SOUL.md", "IDENTITY.md")
+
+
+def persona_path(root: Path, agent: str, file: str = "SOUL.md") -> Path:
+    """人格文件路径。agent 和 file 必须各过一道白名单。
+
+    两个白名单缺一不可：只校验 agent 时，`file` 传 `../../config.json`
+    就能写到库外面去；只校验 file 时，agent 名里的 `..` 同理。
+    """
     if not AGENT_ID_RE.match(agent or ""):
         raise ValueError("agent 名不合法")
+    if file not in PERSONA_FILES:
+        raise ValueError(f"只能写 {' / '.join(PERSONA_FILES)}")
     folder = (root / "agents" / agent).resolve()
     if root not in folder.parents or not folder.is_dir():
         raise FileNotFoundError(f"没有 agents/{agent}")
-    p = folder / "SOUL.md"
+    p = folder / file
     if not p.is_file():
-        raise FileNotFoundError(f"agents/{agent}/SOUL.md 不存在")
+        raise FileNotFoundError(f"agents/{agent}/{file} 不存在")
     return p
 
 
-def write_soul(root: Path, agent: str, text: str, expect_mtime) -> dict:
-    """整份 SOUL.md 覆盖写。分段逻辑在前端，服务端只管「原件没被别人改过」。"""
-    p = soul_path(root, agent)
+def _check_mtime(p: Path, expect_mtime) -> None:
+    """原件在打开后被别人改过就拒绝：前端拿着旧正文覆盖会把对方的改动吞掉。"""
+    if expect_mtime is None:
+        return
+    try:
+        expected = float(expect_mtime)
+    except (TypeError, ValueError):
+        return
+    if abs(p.stat().st_mtime - expected) > 0.001:
+        raise mem.MetaError("conflict", "文件在打开后被改过，先重新加载再保存")
+
+
+def write_persona(root: Path, agent: str, file: str, text: str, expect_mtime) -> dict:
+    """整份人格文件覆盖写。分段逻辑在前端，服务端只管「原件没被别人改过」。"""
+    p = persona_path(root, agent, file)
     if not isinstance(text, str):
         raise ValueError("text 要是字符串")
     if len(text) > 400000:
-        raise ValueError("SOUL.md 超过 40 万字符，拒绝写入")
-    if expect_mtime is not None:
-        try:
-            if abs(p.stat().st_mtime - float(expect_mtime)) > 0.001:
-                raise mem.MetaError("conflict", "文件在打开后被改过，先重新加载再保存")
-        except (TypeError, ValueError):
-            pass
+        raise ValueError(f"{file} 超过 40 万字符，拒绝写入")
+    _check_mtime(p, expect_mtime)
     backup(p, root)
     mem.write(p, text)
-    return {"agent": agent, "path": f"agents/{agent}/SOUL.md",
+    return {"agent": agent, "path": f"agents/{agent}/{file}",
             "bytes": len(text.encode("utf-8")), "mtime": p.stat().st_mtime}
+
+
+def write_soul(root: Path, agent: str, text: str, expect_mtime) -> dict:
+    """兼容旧路径：`/api/soul` 与 `api.py soul` 都还走这里。"""
+    return write_persona(root, agent, "SOUL.md", text, expect_mtime)
+
+
+def write_text(root: Path, rel: str, text: str, expect_mtime) -> dict:
+    """记忆页的自由文本写入（服务端模式，不依赖目录授权）。
+
+    只放 `.md`：这个页面是「看记忆、改记忆」，不是文件管理器；放开后缀等于
+    把 config.json 和插件代码也交出去。`.state` / `.git` 另有用途，一律不写。
+    """
+    p = safe_path(root, rel)
+    if p.suffix.lower() != ".md":
+        raise ValueError("只允许保存 .md 文件")
+    if {".state", ".git"} & set(p.parts):
+        raise ValueError(".state / .git 下的文件不给写")
+    if not p.is_file():
+        raise FileNotFoundError(rel)
+    if not isinstance(text, str):
+        raise ValueError("text 要是字符串")
+    if len(text) > 400000:
+        raise ValueError("文件超过 40 万字符，拒绝写入")
+    _check_mtime(p, expect_mtime)
+    backup(p, root)
+    mem.write(p, text)
+    return {"path": rel, "bytes": len(text.encode("utf-8")), "mtime": p.stat().st_mtime}
 
 
 def apply_project_meta(root: Path, data: dict) -> dict:
@@ -452,7 +496,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         parsed = urlparse(self.path)
         root = self.root
-        if parsed.path not in {"/api/project-meta", "/api/config", "/api/soul"}:
+        if parsed.path not in {"/api/project-meta", "/api/config", "/api/soul",
+                               "/api/persona", "/api/file"}:
             return self._error(404, f"没有这个接口：{parsed.path}")
         try:
             data = self._body()
@@ -461,6 +506,13 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/soul":
                 return self._ok(write_soul(
                     root, str(data.get("agent", "")), data.get("text", ""), data.get("mtime")))
+            if parsed.path == "/api/persona":
+                return self._ok(write_persona(
+                    root, str(data.get("agent", "")), str(data.get("file") or "SOUL.md"),
+                    data.get("text", ""), data.get("mtime")))
+            if parsed.path == "/api/file":
+                return self._ok(write_text(
+                    root, str(data.get("path", "")), data.get("text", ""), data.get("mtime")))
 
             return self._ok(apply_project_meta(root, data))
         except mem.MetaError as exc:
@@ -623,6 +675,40 @@ def self_test(root: Path) -> int:
 
         code, data = _get(f"{base}/api/file?path=" + urllib.parse.quote("../config.json"))
         check("路径越界被拒", code == 400, f"{code}")
+
+        # 3b. 两条写入通道的成功路径：只验拒绝不验成功，等于没验过真能写
+        bdir = root / ".state" / "ui-backups"
+        backups_before = set(bdir.glob("*.bak")) if bdir.is_dir() else set()
+        tmp_agent = root / "agents" / "zz-selftest"
+        tmp_md = root / "shared" / "zz-selftest.md"
+        try:
+            tmp_agent.mkdir(parents=True, exist_ok=True)
+            ident = tmp_agent / "IDENTITY.md"
+            ident.write_text("# IDENTITY.md\n\n- **Name:** 自检\n", encoding="utf-8")
+            code, data = _post(f"{base}/api/persona", {
+                "agent": "zz-selftest", "file": "IDENTITY.md",
+                "text": "# IDENTITY.md\n\n- **Name:** 自检改\n",
+                "mtime": ident.stat().st_mtime})
+            check("POST /api/persona 正常保存",
+                  code == 200 and "自检改" in ident.read_text(encoding="utf-8"),
+                  f"{code} {data.get('error', '')}")
+
+            tmp_md.write_text("# 自检\n", encoding="utf-8")
+            code, data = _post(f"{base}/api/file", {
+                "path": "shared/zz-selftest.md", "text": "# 自检改\n",
+                "mtime": tmp_md.stat().st_mtime})
+            check("POST /api/file 正常保存",
+                  code == 200 and tmp_md.read_text(encoding="utf-8") == "# 自检改\n",
+                  f"{code} {data.get('error', '')}")
+
+            backups_after = set(bdir.glob("*.bak")) if bdir.is_dir() else set()
+            check("写入前留了备份", len(backups_after - backups_before) >= 2,
+                  f"{len(backups_after - backups_before)} 份")
+        finally:
+            shutil.rmtree(tmp_agent, ignore_errors=True)
+            tmp_md.unlink(missing_ok=True)
+            for p in (set(bdir.glob("*.bak")) if bdir.is_dir() else set()) - backups_before:
+                p.unlink(missing_ok=True)
 
         # 4. 结构化写入：幂等、改单字段、冲突检测
         import tempfile

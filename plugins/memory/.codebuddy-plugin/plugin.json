@@ -1,6 +1,6 @@
 {
   "name": "memory",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "长期记忆：两级册子（项目册 + 总册），agent 按 persona-harness 分目录；CLI 管 playbooks / topics / 项目册三类，缺提炼会提醒",
   "skills": [
     "./skills/memory",

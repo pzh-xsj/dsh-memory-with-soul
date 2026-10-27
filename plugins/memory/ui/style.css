@@ -64,13 +64,28 @@ code {
   border-bottom: 1px solid var(--line);
 }
 
-/* 嵌进宿主设置分区（?embed=1）：外壳已有标题，顶栏收起，页签留在顶部。 */
+/* 嵌进宿主设置分区（?embed=1）：外壳已有标题，只收起品牌那半边。
+   整条藏掉会连「连接本地目录…」一起消失——入口找不到就是这么来的。
+   靠右站队：左边留给外壳自己的「记忆库」标题，别抢位置。 */
 body.embed .topbar {
+  padding: 6px 24px;
+  justify-content: flex-end;
+  background: transparent;
+  border-bottom: 0;
+}
+
+body.embed .brand {
   display: none;
 }
 
 body.embed main {
-  padding-top: 14px;
+  padding-top: 8px;
+}
+
+/* 身份卡的 Emoji 字段是单字形：正文用的等宽字体里没有 ♑ 这类符号，会显示成方框 */
+#idEmoji {
+  font-family: "Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols", sans-serif;
+  font-size: 15px;
 }
 
 .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
@@ -389,6 +404,12 @@ details.group > .body { padding: 0 0 8px 14px; }
 .list-item.active { background: var(--accent-dim); color: #dbe6ff; }
 .list-item .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-item .meta { flex: 0 0 auto; white-space: nowrap; margin-left: auto; color: var(--muted); font-size: 11px; font-family: var(--mono); }
+
+/* 嵌套目录：缩进由 .body 的 padding 逐层累加，不再另算深度；
+   里层不画分隔线，否则三层目录看着像三张表。 */
+details.group details.group { border-bottom: 0; }
+details.group details.group > summary { font-size: 12.5px; color: var(--text-2, var(--muted)); }
+details.group > .body > .list-item { border-radius: 4px; }
 
 /* ---------------------------------------------------------------- toast */
 

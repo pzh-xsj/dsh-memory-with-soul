@@ -21,11 +21,12 @@
 
   overview [--cwd DIR] [--agent ID]
   tree
-  file --path REL
+  file --path REL [--write body]
   config [body]
   checkup [--all]
   project-meta [--path WS] [body]
   soul body
+  persona body
 """
 
 from __future__ import annotations
@@ -89,6 +90,11 @@ def dispatch(name: str, argv: list[str]) -> tuple[int, dict]:
     if name == "tree":
         return 200, serve.view_tree(root)
     if name == "file":
+        if flag(argv, "--write") is not None:
+            body = read_body(argv)
+            return 200, serve.write_text(
+                root, str(body.get("path") or flag(argv, "--path") or ""),
+                body.get("text", ""), body.get("mtime"))
         return 200, serve.view_file(root, flag(argv, "--path") or "")
     if name == "checkup":
         return 200, mem.collect_checkup(root, all_projects=flag(argv, "--all") in ("1", "true", "yes"))
@@ -106,6 +112,11 @@ def dispatch(name: str, argv: list[str]) -> tuple[int, dict]:
         body = read_body(argv)
         return 200, serve.write_soul(
             root, str(body.get("agent", "")), body.get("text", ""), body.get("mtime"))
+    if name == "persona":
+        body = read_body(argv)
+        return 200, serve.write_persona(
+            root, str(body.get("agent", "")), str(body.get("file") or "SOUL.md"),
+            body.get("text", ""), body.get("mtime"))
 
     raise ValueError(f"没有这个接口：{name}")
 

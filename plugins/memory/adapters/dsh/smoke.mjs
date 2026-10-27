@@ -233,7 +233,7 @@ check('内置设置页 / web.js 路由表合法', async () => {
   }
   web.registerMemoryUi(ctx, { pagesDir: join(HERE, '..', '..', 'ui'), exec: async () => null, logger: ctx.logger })
 
-  must(registered.length === 9, `注册了 ${String(registered.length)} 条，期望 9`)
+  must(registered.length === 10, `注册了 ${String(registered.length)} 条，期望 10`)
   for (const route of registered) {
     must(route.path.startsWith('/api/'), `路由不在 /api 下：${route.path}`)
     const segments = route.path.slice('/api/'.length).split('/')

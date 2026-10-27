@@ -2143,6 +2143,9 @@ def cmd_timeline(root: Path, days: int = 30) -> int:
 # ---------------------------------------------------------------- 命令：init
 
 AGENT_TEMPLATES = {
+    # SOUL.md 的四节是「人格页」按节编辑的依据（ui/settings.html 的 parseSoul）：
+    # 原则讲怎么做事、沟通讲怎么说话（提问/语气是它的两个面）、禁区讲不碰什么、
+    # 记忆讲跨会话靠什么延续。新 agent 拿这个骨架填，别改节名。
     "SOUL.md": """---
 title: SOUL
 owner: user
@@ -2152,7 +2155,19 @@ updated: {today}
 
 # SOUL.md - 我是谁
 
-_（待写：这个 agent 的底色、准则、语气。改它要告诉主人。）_
+_（待写：这个 agent 的底色。改它要告诉主人。）_
+
+## 原则
+
+## 沟通
+
+### 提问
+
+### 语气
+
+## 禁区
+
+## 记忆
 """,
     "IDENTITY.md": """---
 title: IDENTITY
