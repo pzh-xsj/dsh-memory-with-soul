@@ -25,6 +25,8 @@
   config [body]                带 order 改注入顺序，否则改白名单键
   checkup [--all]              加 --write 时执行修复（body: kinds/dry）
   project-meta [--path WS] [body]
+  playbook                     列领域与 method.md 状态
+  playbook --write body        新建领域（body: kind/title/summary/when/fill）
   soul body
   persona body
 """
@@ -114,6 +116,10 @@ def dispatch(name: str, argv: list[str]) -> tuple[int, dict]:
             return 200, serve.apply_project_meta(root, read_body(argv))
         book = serve.project_book(flag(argv, "--path") or "")
         return 200, mem.read_project_meta(book / "_meta.md")
+    if name == "playbook":
+        if flag(argv, "--write") is not None:
+            return 200, serve.apply_playbook(root, read_body(argv))
+        return 200, serve.view_playbooks(root)
     if name == "soul":
         body = read_body(argv)
         return 200, serve.write_soul(

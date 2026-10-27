@@ -43,6 +43,7 @@
 
 <nav class="tabs">
   <button data-tab="overview" class="active">概览</button>
+  <button data-tab="project">项目册</button>
   <button data-tab="memory">记忆</button>
   <button data-tab="persona">人格</button>
   <button data-tab="user">用户</button>
@@ -113,6 +114,56 @@
   </div>
 </section>
 
+<!-- ------------------------------------------------------------ 项目册 -->
+<section id="tab-project" class="tab">
+  <div class="card">
+    <h2>项目册元信息 <span class="sub">status / kind / 定位 / 注意事项</span></h2>
+    <p class="hint">这几项是机器要读的字段，手改容易破格式，所以在这里改。写入前自动备份到 <code>.state/ui-backups</code>。</p>
+    <div class="row">
+      <label>项目册</label>
+      <select id="projectSelect"><option value="">（未加载）</option></select>
+    </div>
+    <div class="row">
+      <label>标题</label>
+      <input type="text" id="pmTitle" disabled>
+    </div>
+    <div class="row">
+      <label>status</label>
+      <select id="pmStatus" disabled></select>
+    </div>
+    <div class="row">
+      <label>kind</label>
+      <select id="pmKind" disabled></select>
+    </div>
+    <p class="hint" id="pmKindRoute">—</p>
+    <div class="row" style="grid-template-columns:220px 1fr;align-items:start">
+      <label>定位</label>
+      <div>
+        <textarea id="pmPosition" style="min-height:60px" disabled></textarea>
+        <p class="hint"><span id="pmPosCount">0</span> / 40 字（checkup 在 40 字处提示，写入上限 120）</p>
+      </div>
+    </div>
+    <div class="row" style="grid-template-columns:220px 1fr;align-items:start">
+      <label>注意事项 · 禁区</label>
+      <textarea id="pmForbidden" style="min-height:80px" disabled></textarea>
+    </div>
+    <div class="row" style="grid-template-columns:220px 1fr;align-items:start">
+      <label>注意事项 · 前置动作</label>
+      <textarea id="pmPre" style="min-height:80px" disabled></textarea>
+    </div>
+    <div class="row" style="grid-template-columns:220px 1fr;align-items:start">
+      <label>注意事项 · 读取提示</label>
+      <textarea id="pmHints" style="min-height:80px" disabled></textarea>
+    </div>
+    <div class="actions">
+      <button class="primary" id="pmSave" disabled>保存元信息</button>
+      <button id="pmReload" disabled>重新加载</button>
+      <div class="spacer"></div>
+      <span class="hint" id="pmHint"></span>
+    </div>
+  </div>
+</section>
+
 <!-- ------------------------------------------------------------ 记忆 -->
 <section id="tab-memory" class="tab">
   <div class="card">
@@ -177,51 +228,6 @@
     </div>
   </div>
 
-  <div class="card">
-    <h2>项目册元信息 <span class="sub">status / kind / 定位 / 注意事项</span></h2>
-    <p class="hint">这几项是机器要读的字段，手改容易破格式，所以在这里改。写入前自动备份到 <code>.state/ui-backups</code>。</p>
-    <div class="row">
-      <label>项目册</label>
-      <select id="projectSelect"><option value="">（未加载）</option></select>
-    </div>
-    <div class="row">
-      <label>标题</label>
-      <input type="text" id="pmTitle" disabled>
-    </div>
-    <div class="row">
-      <label>status</label>
-      <select id="pmStatus" disabled></select>
-    </div>
-    <div class="row">
-      <label>kind</label>
-      <select id="pmKind" disabled></select>
-    </div>
-    <div class="row" style="grid-template-columns:220px 1fr;align-items:start">
-      <label>定位</label>
-      <div>
-        <textarea id="pmPosition" style="min-height:60px" disabled></textarea>
-        <p class="hint"><span id="pmPosCount">0</span> / 40 字（checkup 在 40 字处提示，写入上限 120）</p>
-      </div>
-    </div>
-    <div class="row" style="grid-template-columns:220px 1fr;align-items:start">
-      <label>注意事项 · 禁区</label>
-      <textarea id="pmForbidden" style="min-height:80px" disabled></textarea>
-    </div>
-    <div class="row" style="grid-template-columns:220px 1fr;align-items:start">
-      <label>注意事项 · 前置动作</label>
-      <textarea id="pmPre" style="min-height:80px" disabled></textarea>
-    </div>
-    <div class="row" style="grid-template-columns:220px 1fr;align-items:start">
-      <label>注意事项 · 读取提示</label>
-      <textarea id="pmHints" style="min-height:80px" disabled></textarea>
-    </div>
-    <div class="actions">
-      <button class="primary" id="pmSave" disabled>保存元信息</button>
-      <button id="pmReload" disabled>重新加载</button>
-      <div class="spacer"></div>
-      <span class="hint" id="pmHint"></span>
-    </div>
-  </div>
 </section>
 
 <!-- ------------------------------------------------------------ 体检 -->
@@ -330,6 +336,33 @@
       <button id="orderRevert" disabled>放弃顺序</button>
       <div class="spacer"></div>
       <span class="hint" id="orderHint"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>领域 <span class="sub">shared/playbooks/</span></h2>
+    <p class="hint">每个领域 = 一个目录 + 一份 <code>method.md</code>。项目册的 kind 从这张表里选；这里只建文件，正文去记忆页写。不提供改名与删除——删掉会让引用它的项目册 kind 悬空。</p>
+    <div id="pbList"><p class="empty">—</p></div>
+    <div class="row">
+      <label>目录名</label>
+      <input type="text" id="pbKind" placeholder="embodied" autocomplete="off">
+    </div>
+    <div class="row">
+      <label>标题</label>
+      <input type="text" id="pbTitle" placeholder="具身智能" autocomplete="off">
+    </div>
+    <div class="row">
+      <label>一句话说明</label>
+      <input type="text" id="pbSummary" placeholder="机器人 / 强化学习 / 具身智能的选题与方法" autocomplete="off">
+    </div>
+    <div class="row">
+      <label>何时读</label>
+      <input type="text" id="pbWhen" placeholder="规划选题、读论文之前" autocomplete="off">
+    </div>
+    <div class="actions">
+      <button class="primary" id="pbCreate" disabled>新建领域</button>
+      <div class="spacer"></div>
+      <span class="hint" id="pbHint"></span>
     </div>
   </div>
 
@@ -447,6 +480,7 @@ const S = {
   fixing: false,         // 修复请求在途
   order: [],             // 服务端给的 order，已按 priority 排好
   orderDraft: [],        // 页面上拖动中的顺序；保存前不动服务端
+  playbooks: [],         // 领域列表（shared/playbooks/ 下每个目录 + method.md 状态）
   dirty: new Map(),      // panel -> true
   loaded: new Set(),
 };
@@ -661,6 +695,7 @@ async function showTab(name) {
   $$("section.tab").forEach((s) => s.classList.toggle("active", s.id === "tab-" + name));
   const loader = {
     overview: loadOverview,
+    project: loadProjectTab,
     memory: loadMemory,
     persona: loadPersona,
     user: loadUser,
@@ -1167,7 +1202,6 @@ async function loadPersona() {
   if (S.server && !S.overview) await loadOverview();
   await loadAgentList();
   await loadSoul();
-  await loadProjectList();
 }
 
 async function loadPersonaLocal() {
@@ -1468,7 +1502,13 @@ $("#userSave").addEventListener("click", async () => {
   }
 });
 
-/* ================================================================ 人格：项目册元信息 */
+/* ================================================================ 项目册：元信息 */
+
+async function loadProjectTab() {
+  if (S.server && !S.overview) await loadOverview();
+  if (S.server) await loadPlaybooks();   // kind 路由提示要知道每份 method.md 在不在
+  await loadProjectList();   // 末尾会自己 loadMeta()
+}
 
 async function loadProjectList() {
   const sel = $("#projectSelect");
@@ -1523,6 +1563,7 @@ async function loadMeta() {
     for (const k of kinds) kindSel.append(h("option", { value: k, text: k }));
     if (data.kind && !kinds.includes(data.kind)) kindSel.append(h("option", { value: data.kind, text: `${data.kind}（现有，不在 playbooks 里）` }));
     kindSel.value = data.kind || "";
+    updateKindRoute(data.kind);
 
     fields.forEach((sel) => { $(sel).disabled = false; });
     $("#pmSave").disabled = false;
@@ -1542,9 +1583,33 @@ function updatePosCount() {
   $("#pmPosCount").textContent = $("#pmPosition").value.length;
 }
 
+/**
+ * kind 只是「引用」：它指向 shared/playbooks/<kind>/method.md。
+ * 指向不存在的东西时不会报错——渲染器直接跳过，等于这本书没有方法论。
+ * 那是最容易「看着一切正常、其实少了一半」的情况，所以在选择处就说明白。
+ */
+function updateKindRoute(kind) {
+  const el = $("#pmKindRoute");
+  if (!kind) {
+    el.textContent = "没写 kind：这本书不会注入任何 playbook。";
+    return;
+  }
+  const row = (S.playbooks || []).find((p) => p.kind === kind);
+  if (row) {
+    el.textContent = row.has_method
+      ? `kind=${kind} → shared/playbooks/${kind}/method.md（存在）`
+      : `kind=${kind} → shared/playbooks/${kind}/method.md（缺文件，注入会跳过；去「设置 · 领域」补模板）`;
+    return;
+  }
+  el.textContent = `kind=${kind} 不在 shared/playbooks/ 里：注入会跳过。去「设置 · 领域」新建。`;
+}
+
 ["#pmTitle", "#pmStatus", "#pmKind", "#pmPosition", "#pmForbidden", "#pmPre", "#pmHints"].forEach((sel) => {
   $(sel).addEventListener("input", () => { markDirty("meta", true); if (sel === "#pmPosition") updatePosCount(); });
-  $(sel).addEventListener("change", () => markDirty("meta", true));
+  $(sel).addEventListener("change", () => {
+    markDirty("meta", true);
+    if (sel === "#pmKind") updateKindRoute($(sel).value);
+  });
 });
 
 $("#projectSelect").addEventListener("change", (e) => {
@@ -1778,6 +1843,7 @@ async function loadConfigForm() {
   if (!S.server) {
     hint.textContent = "设置要靠服务端写：" + SERVER_HINT;
     $("#cfgSave").disabled = true;
+    await loadPlaybooks();
     return;
   }
   const data = await api("/api/config");
@@ -1797,6 +1863,7 @@ async function loadConfigForm() {
   renderOrder();
   markDirty("order", false);
   $("#orderHint").textContent = order.length ? "改完点「保存顺序」；下一次会话生效" : "";
+  await loadPlaybooks();
 }
 
 $("#cfgReload").addEventListener("click", async () => {
@@ -1859,6 +1926,109 @@ $("#orderRevert").addEventListener("click", () => {
   toast("已放弃顺序改动");
 });
 
+/* ================================================================ 设置：领域（shared/playbooks/） */
+
+// 与 core/memory.py 的 KIND_RE 同形：目录名 = kind，也是防目录穿越的口子。
+const PB_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+function renderPlaybooks() {
+  const box = $("#pbList");
+  const kinds = S.playbooks || [];
+  if (!kinds.length) {
+    box.replaceChildren(h("p", { class: "empty", text: "还没有领域。填下面四项建第一个。" }));
+    return;
+  }
+  box.replaceChildren(h("table", {},
+    h("thead", {}, h("tr", {},
+      h("th", { text: "领域" }), h("th", { text: "method.md" }),
+      h("th", { text: "标题" }), h("th", { text: "动作" }))),
+    h("tbody", {}, kinds.map((p) => h("tr", {},
+      h("td", { class: "mono", text: p.kind }),
+      h("td", {}, p.has_method
+        ? h("span", { class: "badge ok", text: "有" })
+        : h("span", { class: "badge warn", text: "缺" })),
+      h("td", { text: p.title || "—" }),
+      h("td", {}, p.has_method
+        ? h("span", { class: "hint", text: "正文去记忆页改" })
+        : h("button", { class: "small", "data-fill": p.kind, text: "补模板" })))))));
+}
+
+async function loadPlaybooks() {
+  if (!S.server) {
+    $("#pbList").replaceChildren(h("p", { class: "empty", text: "领域要靠服务端读写：" + SERVER_HINT }));
+    $("#pbHint").textContent = "";
+    return;
+  }
+  const data = await api("/api/playbook");
+  S.playbooks = data.kinds || [];
+  renderPlaybooks();
+  $("#pbHint").textContent = S.playbooks.length
+    ? `${S.playbooks.length} 个领域；缺 method.md 的点「补模板」，补齐三项再建`
+    : "还没有领域";
+  updateKindRoute($("#pmKind").value);
+}
+
+function pbPayload() {
+  return {
+    kind: $("#pbKind").value.trim(),
+    title: $("#pbTitle").value.trim(),
+    summary: $("#pbSummary").value.trim(),
+    when: $("#pbWhen").value.trim(),
+  };
+}
+
+$("#pbCreate").addEventListener("click", async () => {
+  const body = pbPayload();
+  if (!PB_RE.test(body.kind)) {
+    toast("目录名只能是小写字母/数字/连字符，1-32 位", true);
+    $("#pbKind").focus();
+    return;
+  }
+  if (!body.title || !body.summary || !body.when) {
+    toast("标题、一句话说明、何时读都要填", true);
+    return;
+  }
+  const existing = (S.playbooks || []).find((p) => p.kind === body.kind);
+  if (existing && existing.has_method) {
+    toast(`${body.kind} 已经有 method.md 了`, true);
+    return;
+  }
+  if (existing && !existing.has_method) {
+    // 半成品：目录在、文件缺。只补文件，不碰目录里别的东西。
+    if (!confirm(`shared/playbooks/${body.kind}/ 已存在但缺 method.md。只补这份模板？`)) return;
+    body.fill = true;
+  }
+  $("#pbCreate").disabled = true;
+  try {
+    const res = await api("/api/playbook", { method: "POST", body });
+    const extra = [
+      res.index_synced ? `索引同步 ${res.index_synced} 张表` : "",
+      ...(res.warnings || []),
+    ].filter(Boolean).join(" · ");
+    toast(`已新建 ${res.path}`);
+    $("#pbHint").textContent = extra ? `${res.path} · ${extra}` : `${res.path} · 正文去记忆页写`;
+    ["#pbKind", "#pbTitle", "#pbSummary", "#pbWhen"].forEach((s) => { $(s).value = ""; });
+    await loadPlaybooks();
+    // 项目册页的 kind 选项来自 overview.kinds，建完要重取
+    S.overview = null;
+    S.loaded.delete("overview");
+    S.loaded.delete("project");
+  } catch (e) {
+    toast((e.code === "conflict" ? "建不了：" : "新建失败：") + e.message, true);
+  } finally {
+    refreshButtons();
+  }
+});
+
+$("#pbList").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-fill]");
+  if (!b) return;
+  $("#pbKind").value = b.dataset.fill;
+  $("#pbTitle").focus();
+  $("#pbHint").textContent =
+    `补 ${b.dataset.fill}：填标题、一句话说明、何时读，再点「新建领域」——只会补 method.md`;
+});
+
 /* ================================================================ 按钮联动 / 快捷键 */
 
 function refreshButtons() {
@@ -1880,6 +2050,7 @@ function refreshButtons() {
   const fixable = (S.fixable || []).length;
   $("#ckFix").textContent = `修可修的 ${fixable} 项`;
   $("#ckFix").disabled = !(S.server && !S.fixing && !S.checkupAll && fixable > 0);
+  $("#pbCreate").disabled = !S.server;
   markDirty();
 }
 
@@ -1888,9 +2059,9 @@ function saveActive() {
   const name = tab ? tab.dataset.tab : "";
   if (name === "memory") $("#memSave").click();
   else if (name === "user") $("#userSave").click();
+  else if (name === "project") { if (S.dirty.get("meta")) $("#pmSave").click(); }
   else if (name === "persona") {
     if (S.dirty.get("soul")) $("#soulSave").click();
-    else if (S.dirty.get("meta")) $("#pmSave").click();
   } else if (name === "config") {
     if (S.dirty.get("order")) $("#orderSave").click();
     else $("#cfgSave").click();

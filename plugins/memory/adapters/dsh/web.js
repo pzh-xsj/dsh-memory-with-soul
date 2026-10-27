@@ -45,6 +45,8 @@ const ENDPOINTS = [
   // 在 `--write` 上分叉——不新增路由，省掉一条「要不要带 all」的歧义。
   { path: `${API_PREFIX}/checkup`, api: 'checkup', methods: ['GET', 'POST'], query: ['all'], write: true },
   { path: `${API_PREFIX}/project-meta`, api: 'project-meta', methods: ['GET', 'POST'], query: ['path'], write: true },
+  // GET 列领域；POST = 新建 `shared/playbooks/<kind>/method.md`（body: kind/title/summary/when/fill）。
+  { path: `${API_PREFIX}/playbook`, api: 'playbook', methods: ['GET', 'POST'], query: [], write: true },
   { path: `${API_PREFIX}/soul`, api: 'soul', methods: ['POST'], query: [], write: true },
   { path: `${API_PREFIX}/persona`, api: 'persona', methods: ['POST'], query: [], write: true },
 ]

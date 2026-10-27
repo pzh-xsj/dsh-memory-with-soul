@@ -82,7 +82,7 @@ check('apply 不抛错', threw === undefined, threw ?? '')
 check('挂了 agent/created', (ctx.listeners.get('agent/created')?.length ?? 0) === 1)
 check('挂了 agent/disposed', (ctx.listeners.get('agent/disposed')?.length ?? 0) === 1)
 check('挂了 session/event', (ctx.listeners.get('session/event')?.length ?? 0) === 2, String(ctx.listeners.get('session/event')?.length))
-check('注册了 10 条路由', ctx.routes.length === 10, String(ctx.routes.length))
+check('注册了 11 条路由', ctx.routes.length === 11, String(ctx.routes.length))
 check('路由都在 /api 下', ctx.routes.every((r) => r.path.startsWith('/api/')))
 check('启动日志打出页面地址', ctx.logs.some((l) => l.includes('/api/memory/ui')), ctx.logs.find((l) => l.includes('/api/memory/ui')) ?? '无')
 check('前缀是 /api/memory', API_PREFIX === '/api/memory', API_PREFIX)
@@ -118,7 +118,7 @@ const html = await page.text()
 check('页面 200', page.status === 200, String(page.status))
 check('注入了 API_BASE', html.includes('window.__MEMORY_API_BASE__="/api/memory"'))
 check('注入了 EMBEDDED', html.includes('window.__MEMORY_EMBEDDED__=true'))
-check('页面有六个页签', ['概览', '记忆', '人格', '用户', '体检', '设置'].every((t) => html.includes(t)))
+check('页面有七个页签', ['概览', '项目册', '记忆', '人格', '用户', '体检', '设置'].every((t) => html.includes(t)))
 
 const css = await routes.get(`${API_PREFIX}/style.css`).fetch(new Request(`http://127.0.0.1:1${API_PREFIX}/style.css`))
 check('样式表 200', css.status === 200, String(css.status))
@@ -192,12 +192,32 @@ check('file 只允许写 .md', fileType.status === 400, `${fileType.status} ${fi
 const fileEscape = await post('file', { path: '../../../../etc/passwd', text: 'x' })
 check('写越界路径被拒', fileEscape.status === 400 || fileEscape.status === 404, String(fileEscape.status))
 
+// 领域：GET 列目录，POST 只能新建；只验拒绝路径，不往真库添文件
+const playbook = await get('playbook')
+const kindList = playbook.body.kinds ?? []
+check('playbook 列出领域与文件状态',
+  playbook.status === 200 && Array.isArray(kindList) && kindList.every((k) => 'kind' in k && 'has_method' in k),
+  String(kindList.length))
+
+const pbBad = await post('playbook', { kind: '../evil', title: 'x', summary: 'y', when: 'z' })
+check('领域名不合法 → 400', pbBad.status === 400, `${pbBad.status} ${pbBad.body.error ?? ''}`)
+
+const pbEmpty = await post('playbook', { kind: 'zz-selftest', title: '自检', summary: '', when: '自检时' })
+check('领域空说明 → 400', pbEmpty.status === 400, `${pbEmpty.status}`)
+
+const existing = kindList.find((k) => k.has_method)
+if (existing) {
+  const pbDup = await post('playbook', { kind: existing.kind, title: '覆盖试试', summary: 'y', when: 'z' })
+  check('已有 method.md → 409（不覆盖）', pbDup.status === 409, `${pbDup.status}`)
+}
+
 // methods 是声明，宿主据此分发；handler 自己不拒方法，所以断言声明
 check('tree 只声明 GET', String(routes.get(`${API_PREFIX}/tree`).methods) === 'GET', String(routes.get(`${API_PREFIX}/tree`).methods))
 check('soul 只声明 POST', String(routes.get(`${API_PREFIX}/soul`).methods) === 'POST')
 check('config 声明 GET,POST', String(routes.get(`${API_PREFIX}/config`).methods) === 'GET,POST')
 check('checkup 声明 GET,POST', String(routes.get(`${API_PREFIX}/checkup`).methods) === 'GET,POST', String(routes.get(`${API_PREFIX}/checkup`).methods))
 check('file 声明 GET,POST', String(routes.get(`${API_PREFIX}/file`).methods) === 'GET,POST', String(routes.get(`${API_PREFIX}/file`).methods))
+check('playbook 声明 GET,POST', String(routes.get(`${API_PREFIX}/playbook`).methods) === 'GET,POST', String(routes.get(`${API_PREFIX}/playbook`).methods))
 check('persona 只声明 POST', String(routes.get(`${API_PREFIX}/persona`).methods) === 'POST')
 check('全部路由都带 requestBody', [...routes.values()].every((r) => r.requestBody === 'buffered'))
 

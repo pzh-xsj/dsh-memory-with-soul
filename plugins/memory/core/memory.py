@@ -408,6 +408,141 @@ def kind_label(kind: str) -> str:
     return f"{kind}（{KIND_NAMES[kind]}）"
 
 
+def playbook_dirs(root: Path) -> list[dict]:
+    """`shared/playbooks/` 下每个领域目录 + 它的 method.md 状态。
+
+    与 `playbook_kinds()` 的区别：那个只回答「有哪些名字」（kind 的取值域），
+    这个回答「每份文件齐不齐、写了什么」，给设置页的「领域」卡用。
+    """
+    base = root / "shared" / "playbooks"
+    if not base.is_dir():
+        return []
+    out = []
+    for d in sorted(p for p in base.iterdir() if p.is_dir()):
+        f = d / "method.md"
+        fm = parse_frontmatter(f) if f.is_file() else {}
+        out.append({
+            "kind": d.name,
+            "has_method": f.is_file(),
+            "title": fm.get("title", ""),
+            "summary": fm.get("summary", ""),
+            "when": fm.get("when", ""),
+        })
+    return out
+
+
+# 新建领域时写进去的骨架。只填四个字段，正文留空——正文该由人写，
+# 程序编出来的「这个领域管什么」比空白更坏：空白别人会去填，空话没人敢删。
+PLAYBOOK_TEMPLATE = """---
+title: {title}
+summary: {summary}
+when: {when}
+group: method
+owner: ai
+created: {date}
+updated: {date}
+---
+
+# {title}
+
+## 这个领域管什么
+
+- 
+
+## 常见动作
+
+- 
+"""
+
+# 三个字段的软上限。超了就是没想清楚，不是格式问题，所以按无效拒掉。
+PLAYBOOK_FIELD_LIMITS = {"title": 60, "summary": 200, "when": 200}
+
+
+def _playbook_field(data: dict, key: str, label: str) -> str:
+    """取一个必填单行字段。换行折成空格（多行粘贴很常见，报错只是添堵）。"""
+    raw = data.get(key) or ""
+    if not isinstance(raw, str):
+        raise MetaError("invalid", f"{label}必须是文本")
+    text = " ".join(raw.split())
+    if not text:
+        raise MetaError("invalid", f"{label}不能为空")
+    limit = PLAYBOOK_FIELD_LIMITS[key]
+    if len(text) > limit:
+        raise MetaError("invalid", f"{label} {len(text)} 字，上限 {limit}")
+    return text
+
+
+def create_playbook(
+    root: Path, data: dict, fill: bool = False
+) -> dict:
+    """新建一个领域 = `shared/playbooks/<kind>/method.md`。
+
+    只建文件，不碰任何项目册的 kind 字段：定义与引用是两个决定，
+    自动把某本书指到新领域上，在「我本来想给另一本书用」时就是改错。
+    `fill=True` 只补文件不动目录（目录已在、缺 method.md 的那种半成品）。
+    """
+    kind = (data.get("kind") or "")
+    if not isinstance(kind, str):
+        raise MetaError("invalid", "领域名必须是文本")
+    kind = kind.strip()
+    if not KIND_RE.fullmatch(kind):
+        raise MetaError(
+            "invalid", "领域名只能是小写字母/数字/连字符，1-32 位（它就是目录名）"
+        )
+    title = _playbook_field(data, "title", "标题")
+    summary = _playbook_field(data, "summary", "一句话说明")
+    when = _playbook_field(data, "when", "何时读")
+
+    base = (root / "shared" / "playbooks").resolve()
+    target_dir = (base / kind).resolve()
+    # kind 已过正则，这里再兜一次：路径必须在 shared/playbooks/ 下面
+    if base not in target_dir.parents:
+        raise MetaError("invalid", "领域名不合法")
+    method = target_dir / "method.md"
+
+    if method.is_file():
+        raise MetaError("conflict", f"{kind} 已经有 method.md 了（不覆盖）")
+    if target_dir.exists() and not fill:
+        raise MetaError(
+            "conflict",
+            f"{kind} 目录已存在但缺 method.md；确认只补模板就带 fill",
+        )
+
+    # 软校验：不拦，只提醒。空话 summary 与 when 撞车体检会报，这里提前说一声。
+    warnings = []
+    hit = [w for w in VAGUE_WORDS if w in summary]
+    if hit:
+        warnings.append(f"summary 里有空话：{'、'.join(hit)}（体检会点名）")
+    for other in playbook_dirs(root):
+        if other["kind"] != kind and other["when"] == when:
+            warnings.append(f"when 与 {other['kind']} 完全相同（体检会说「说不出区别就合并」）")
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    index_path = root / "shared" / "index.md"
+    if index_path.is_file():
+        backup(index_path, root)
+    write(method, PLAYBOOK_TEMPLATE.format(
+        title=title, summary=summary, when=when,
+        date=datetime.now().strftime("%Y-%m-%d"),
+    ))
+
+    # 建完立刻同步总索引：不同步的话下次体检第一条就是「索引漂移」，
+    # 而那条漂移是我自己造成的，不该让主人去点。
+    synced = 0
+    try:
+        synced = sync_index_quiet(root)
+    except Exception as exc:  # 索引修不了也不能把已建的文件删掉
+        warnings.append(f"总索引没同步上（{exc}）；去体检点「同步总索引三张表」")
+
+    return {
+        "created": True,
+        "kind": kind,
+        "path": (target_dir / "method.md").relative_to(root.resolve()).as_posix(),
+        "index_synced": synced,
+        "warnings": warnings,
+    }
+
+
 def list_topics(root: Path) -> list[dict]:
     """`shared/topics/<主题>.md`。单文件主题，不建分册。"""
     base = root / "shared" / "topics"

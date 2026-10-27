@@ -20,7 +20,7 @@ Web 界面 → 左侧栏 **插件** → **添加插件** 旁的箭头 → **选�
 ```bash
 node smoke.mjs          # 17/17：清单、模块加载、v4 来源准入、渲染器四关、路由表、左侧栏
 node test.mjs           # 10/10：用假宿主验三条接线（注入 / track / digest）
-node web.test.mjs       # 39/39：内置设置页的十条路由（入口层 + 真起 python 打每条路由）
+node web.test.mjs       # 44/44：内置设置页的十一条路由（入口层 + 真起 python 打每条路由）
 ```
 
 `test.mjs` 不启动 DSH，也不需要 python 真的跑完——`ctx.subprocess` 被换成记录器，只断言
@@ -35,7 +35,7 @@ node web.test.mjs       # 39/39：内置设置页的十条路由（入口层 + �
 | --- | --- |
 | `index.js` | 三条接线：`agent/created` → 渲染器 → `agent.inject()`；`session/event` 的 `tool/call` → `core/memory.py track`；`turn/end` → `core/memory.py digest` |
 | `cordis.patch.yml` | 挂载行 `- insert: [{ id: memory-inject, … }]`，可调项都写在它的注释里 |
-| `web.js` | 把 `ui/settings.html` 和十条 `/api/memory/*` 路由挂进宿主端口，页面不用另起服务 |
+| `web.js` | 把 `ui/settings.html` 和十一条 `/api/memory/*` 路由挂进宿主端口，页面不用另起服务 |
 | `client.js` | 浏览器半边：`main` 面板 + 左侧栏 `sidebar.panellist` 行 + 设置分区，内容都是 iframe 装 `/api/memory/ui` |
 | `locale/{zh,en}.json` | 界面上的插件标题与描述 |
 | `icon.svg` | 插件图标（952 B） |

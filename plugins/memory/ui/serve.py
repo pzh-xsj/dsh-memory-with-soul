@@ -10,7 +10,7 @@
    UI 时的唯一硬约束**——上一版把体检逻辑抄进前端，架构一改（拆掉
    `shared/domains`）就全坏了，页面还在报一个不存在的「分册」。
 
-写入只有四条，都是「结构化、白名单、先备份」：
+写入只有这五条，都是「结构化、白名单、先备份」：
 
   POST /api/project-meta   改项目册 `_meta.md` 的 status / kind / title /
                            「## 定位」/「## 注意事项」三块
@@ -18,6 +18,8 @@
                            带 `order` 时改注入顺序（只调 priority，不许增删条目）
   POST /api/checkup        **执行修复**：`{"kinds": [...], "dry": bool}`，
                            只做体检里标了 `fix` 的四类机械问题，不收命令字符串
+  POST /api/playbook       新建领域 = `shared/playbooks/<kind>/method.md`。
+                           参数只有四个字段，正文留空给人写；不删不改名
   POST /api/persona /file  整份覆盖 SOUL.md 与任意 `.md`（带 mtime 冲突检测）
 
 自由文本（SOUL、任意 md）的编辑仍然走浏览器的目录授权，服务端不碰——给前端
@@ -409,6 +411,29 @@ def apply_project_meta(root: Path, data: dict) -> dict:
     return mem.write_project_meta(meta, fields, expect_mtime=fields.get("mtime"))
 
 
+def view_playbooks(root: Path) -> dict:
+    """`shared/playbooks/` 下每个领域 + 它的 method.md 状态。
+
+    设置页「领域」卡只读这一份：列表和「缺文件」的判断都来自 core，
+    前端不自己扫目录——两处各扫一遍，迟早一处认 `.md` 另一处不认。
+    """
+    return {"root": str(root), "kinds": mem.playbook_dirs(root)}
+
+
+def apply_playbook(root: Path, data: dict) -> dict:
+    """新建领域。四个字段 + 可选 `fill`（只补文件、不动已存在的目录）。"""
+    return mem.create_playbook(
+        root,
+        {
+            "kind": data.get("kind"),
+            "title": data.get("title"),
+            "summary": data.get("summary"),
+            "when": data.get("when"),
+        },
+        fill=bool(data.get("fill")),
+    )
+
+
 class Handler(SimpleHTTPRequestHandler):
     server_version = "memory-ui/1.0"
     root: Path = Path(".")   # make_server 里填，别在别处改
@@ -458,7 +483,13 @@ class Handler(SimpleHTTPRequestHandler):
         if n > 1024 * 1024:
             raise ValueError("请求体太大")
         raw = self.rfile.read(n)
-        data = json.loads(raw.decode("utf-8"))
+        try:
+            # 不是 UTF-8 就是客户端把本地编码直接发过来了（Windows 的 curl -d 常见），
+            # 这是请求的问题，不是服务端故障——回 400，别让主人对着 500 猜。
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise ValueError("请求体不是 UTF-8：Windows 上用 curl 传中文请加 --data-binary @文件，或让页面代发") from None
+        data = json.loads(text)
         if not isinstance(data, dict):
             raise ValueError("请求体要是 JSON 对象")
         return data
@@ -490,6 +521,8 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/project-meta":
                 book = project_book(q.get("path", ""))
                 return self._ok(mem.read_project_meta(book / "_meta.md"))
+            if parsed.path == "/api/playbook":
+                return self._ok(view_playbooks(root))
             return self._error(404, f"没有这个接口：{parsed.path}")
         except FileNotFoundError as exc:
             return self._error(404, str(exc) or "文件不存在")
@@ -503,7 +536,7 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         root = self.root
         if parsed.path not in {"/api/project-meta", "/api/config", "/api/checkup",
-                               "/api/soul", "/api/persona", "/api/file"}:
+                               "/api/playbook", "/api/soul", "/api/persona", "/api/file"}:
             return self._error(404, f"没有这个接口：{parsed.path}")
         try:
             data = self._body()
@@ -516,6 +549,8 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/checkup":
                 return self._ok(mem.apply_fixes(
                     root, data.get("kinds") or [], dry=bool(data.get("dry"))))
+            if parsed.path == "/api/playbook":
+                return self._ok(apply_playbook(root, data))
             if parsed.path == "/api/soul":
                 return self._ok(write_soul(
                     root, str(data.get("agent", "")), data.get("text", ""), data.get("mtime")))
@@ -589,8 +624,14 @@ def self_test(root: Path) -> int:
     # 1. 静态文件不再引用已拆掉的 shared/domains
     html = (HERE / "settings.html").read_text(encoding="utf-8")
     check("settings.html 不引用 shared/domains", "shared/domains" not in html)
-    check("六个页签都在", all(f'data-tab="{t}"' in html
-                              for t in ("overview", "memory", "persona", "user", "checkup", "config")))
+    check("七个页签都在", all(f'data-tab="{t}"' in html
+                              for t in ("overview", "project", "memory", "persona",
+                                        "user", "checkup", "config")))
+    # 元信息卡从人格页搬到项目册页：两处都在反而说明搬了一半
+    check("元信息卡在项目册页、不在人格页",
+          'id="tab-project"' in html and 'id="pmTitle"' in html
+          and html.index('id="pmTitle"') < html.index('id="tab-memory"')
+          and 'id="pmKindRoute"' in html)
 
     # 样式表注释漏一个 */ 会把后面几十条规则整段吞掉（踩过：卡片全变白底无边框，页面看着像没加载样式）
     css = (HERE / "style.css").read_text(encoding="utf-8")
@@ -892,6 +933,95 @@ def self_test(root: Path) -> int:
         stripped = stripped.replace(_token_block(':root[data-theme="light"] {'), "")
         literals = re.findall(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", stripped)
         check("token 区之外没有颜色字面量", not literals, ", ".join(literals[:5]))
+
+        # 9. 领域（shared/playbooks/<kind>/method.md）：HTTP 只验拒绝路径，
+        #    真建文件在临时根上试——自检不该往真库里添东西。
+        code, data = _get(f"{base}/api/playbook")
+        plist = data.get("kinds") or []
+        ok = (code == 200 and isinstance(plist, list)
+              and all({"kind", "has_method"} <= set(k) for k in plist))
+        check("GET /api/playbook 列出领域与文件状态", ok, f"{len(plist)} 个")
+
+        code, _ = _post(f"{base}/api/playbook",
+                        {"kind": "../evil", "title": "x", "summary": "y", "when": "z"})
+        check("非法领域名被拒（400）", code == 400, f"{code}")
+        code, _ = _post(f"{base}/api/playbook",
+                        {"kind": "zz-selftest", "title": "自检", "summary": "", "when": "自检时"})
+        check("空说明被拒（400）", code == 400, f"{code}")
+
+        # 客户端按本地编码发请求体（Windows 上 curl -d 中文就这样）→ 400，不是 500
+        raw_req = urllib.request.Request(
+            f"{base}/api/playbook",
+            data=json.dumps({"kind": "x"}, ensure_ascii=False).encode("gbk"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(raw_req, timeout=10) as r:
+                bad_code = r.status
+        except urllib.error.HTTPError as exc:
+            bad_code = exc.code
+        check("请求体不是 UTF-8 → 400（不是 500）", bad_code == 400, str(bad_code))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp) / "mem"
+            eng = troot / "shared" / "playbooks" / "engineering"
+            eng.mkdir(parents=True)
+            (eng / "method.md").write_text(
+                "---\ntitle: 工程\nsummary: 写代码\nwhen: 动代码时\nowner: ai\n---\n\n正文\n",
+                encoding="utf-8")
+            (troot / "shared" / "playbooks" / "halfdone").mkdir()
+            idx2 = troot / "shared" / "index.md"
+            idx2.write_text(
+                "# 索引\n\n## 项目册（事实源）\n\n| 工作区 | 册子 | 装什么 |\n| --- | --- | --- |\n\n"
+                "## playbooks\n\n| 文件 | 装什么 | 何时读 |\n| --- | --- | --- |\n\n"
+                "## topics\n\n| 文件 | 装什么 | 何时读 |\n| --- | --- | --- |\n",
+                encoding="utf-8")
+            res = mem.create_playbook(troot, {
+                "kind": "embodied", "title": "具身智能",
+                "summary": "机器人 / 强化学习", "when": "规划选题时"})
+            made = troot / "shared" / "playbooks" / "embodied" / "method.md"
+            text2 = idx2.read_text(encoding="utf-8")
+            check("新建领域：文件落盘 + 索引自动补行",
+                  made.is_file() and "embodied/method.md" in text2
+                  and res.get("path") == "shared/playbooks/embodied/method.md",
+                  f"index_synced={res.get('index_synced')}")
+            check("新建领域：目录表里认出 method.md",
+                  any(d["kind"] == "embodied" and d["has_method"] for d in mem.playbook_dirs(troot)))
+
+            try:
+                mem.create_playbook(troot, {
+                    "kind": "embodied", "title": "再来一次", "summary": "y", "when": "z"})
+                check("重复新建被拒", False, "居然覆盖了")
+            except mem.MetaError as exc:
+                check("重复新建被拒（conflict）", exc.code == "conflict", exc.code)
+
+            try:
+                mem.create_playbook(troot, {
+                    "kind": "halfdone", "title": "半成品", "summary": "y", "when": "z"})
+                check("目录已在、缺文件时先要 fill", False, "没要 fill 就写了")
+            except mem.MetaError as exc:
+                check("目录已在、缺文件时先要 fill（conflict）", exc.code == "conflict", exc.code)
+            mem.create_playbook(troot, {
+                "kind": "halfdone", "title": "半成品", "summary": "y",
+                "when": "z"}, fill=True)
+            check("fill 只补文件",
+                  (troot / "shared" / "playbooks" / "halfdone" / "method.md").is_file()
+                  and (troot / "shared" / "playbooks" / "halfdone").is_dir())
+
+            warned = mem.create_playbook(troot, {
+                "kind": "vague", "title": "空话", "summary": "一些等等", "when": "动代码时"})
+            check("空话 summary / when 撞车只提醒不拦",
+                  warned.get("warnings") and len(warned["warnings"]) >= 2,
+                  str(warned.get("warnings")))
+
+            for bad_kind in ("../x", "Bad Name", "有空格", ""):
+                try:
+                    mem.create_playbook(troot, {
+                        "kind": bad_kind, "title": "x", "summary": "y", "when": "z"})
+                    check(f"领域名 {bad_kind!r} 被拒", False, "居然写了")
+                except mem.MetaError as exc:
+                    check(f"领域名 {bad_kind!r} 被拒（invalid）", exc.code == "invalid", exc.code)
     finally:
         httpd.shutdown()
         httpd.server_close()
