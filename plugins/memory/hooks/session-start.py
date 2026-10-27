@@ -469,7 +469,7 @@ def main(argv: list[str]) -> int:
     role, role_src = resolve_role(root, role_agent, config, cli_role)
     if subagent and role_src != "config.roles.subagent":
         warnings.append(
-            "子 agent 没有单独配角色（roles.subagent），" + (f"沿用角色 {role}" if role else "且没有任何角色卡")
+            "子 agent 没有单独配角色（roles.subagent），" + (f"沿用角色 {role}" if role else "defaultRole 也没配，这次没有可注入的人格")
         )
 
     if not role and not (root / "agents" / agent / "SOUL.md").is_file():

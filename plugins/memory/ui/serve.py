@@ -1091,6 +1091,33 @@ def self_test(root: Path) -> int:
                     check(f"领域名 {bad_kind!r} 被拒", False, "居然写了")
                 except mem.MetaError as exc:
                     check(f"领域名 {bad_kind!r} 被拒（invalid）", exc.code == "invalid", exc.code)
+        # 10. 角色卡：新 agent 走卡不走旧目录；两条体检（写坏的映射、孤儿卡）
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp) / "mem"
+            troot.mkdir()
+            mem.cmd_init(troot)
+            rc = mem.cmd_init_agent(troot, "zz-new-dsh", role="zz-role")
+            card = troot / "roles" / "zz-role" / "SOUL.md"
+            saved = json.loads((troot / "config.json").read_text(encoding="utf-8"))
+            check("init --agent 写角色卡，不写旧的 agents/<id>/SOUL.md",
+                  rc == 0 and card.is_file()
+                  and not (troot / "agents" / "zz-new-dsh" / "SOUL.md").exists()
+                  and (saved.get("roles") or {}).get("zz-new-dsh") == "zz-role")
+            rc2 = mem.cmd_init_agent(troot, "zz-second-dsh", role="zz-role")
+            check("--role 指向已有卡时沿用，不覆盖", rc2 == 0 and card.is_file())
+
+            (troot / "roles" / "zz-orphan").mkdir()
+            (troot / "roles" / "zz-orphan" / "SOUL.md").write_text(
+                "---\nname: 孤儿\nidentity: 没人用\n---\n\n## 原则\n", encoding="utf-8")
+            cfg = json.loads((troot / "config.json").read_text(encoding="utf-8"))
+            cfg["roles"]["zz-new-dsh"] = "Bad Role"
+            (troot / "config.json").write_text(
+                json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            report = mem.collect_checkup(troot)
+            msgs = [p["desc"] for p in report["problems"]]
+            check("体检报出写坏的 config.roles", any("不合法" in m for m in msgs), str(msgs[:2]))
+            check("体检报出没人用的角色卡", any("没有任何 agent 指向" in m for m in msgs))
+
     finally:
         httpd.shutdown()
         httpd.server_close()

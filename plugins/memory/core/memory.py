@@ -25,7 +25,8 @@
     python memory.py roles --migrate [--dry] [--default-role <role>]
                                          把 agents/<id>/SOUL.md 搬成角色卡并改写 config
     python memory.py init [路径]         初始化新库
-    python memory.py init --agent <id> [--from <id>]        建一个 agent 的私有目录
+    python memory.py init --agent <id> [--role <role>] [--from <id>]
+                                         建 agent 目录 + 一张角色卡，并写 config.roles
     python memory.py init --project <路径> [--id <id>] [--title <标题>] [--kind <领域>]
                           kind 决定注入哪个 playbook，取值见 `status` 输出
                                                             建一个项目册并登记
@@ -1704,6 +1705,24 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
     # 搬卡是「一次做对、做错就人格错乱」的动作，不该给按钮。
     cfg_now = _config(root)
     cards = list_roles(root, cfg_now)
+    fallback = default_role(root, cfg_now)
+
+    # 写坏的一条会被 role_map() 静默丢掉，agent 于是悄悄回退到 defaultRole——
+    # 人以为配好了，实际没配。这种「静默降级」必须报出来。
+    raw_roles = cfg_now.get("roles")
+    bad_roles = []
+    if isinstance(raw_roles, dict):
+        for a, r in raw_roles.items():
+            if not isinstance(r, str) or not ROLE_RE.match(r):
+                bad_roles.append(f"{a} → {r!r}")
+            elif not re.match(r"^[a-z0-9][a-z0-9-]*$", a):
+                bad_roles.append(f"{a!r} → {r}")
+    if bad_roles:
+        problems.append((
+            3, "config.json",
+            "config.roles 有不合法的一条：" + "、".join(bad_roles),
+            "角色名只允许小写字母/数字/连字符（1-32 位）。写错的会被静默忽略，agent 反而回退到 defaultRole",
+        ))
 
     for card in cards:
         role = card["role"]
@@ -1729,8 +1748,13 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
                 f"{len(card['agents'])} 个 agent 共用这张卡：{'、'.join(card['agents'])}",
                 "它们是同一个人就正常；不是就拆成两张卡，各自 roles 指过去",
             ))
+        if not card["agents"] and fallback != role:
+            problems.append((
+                3, f"角色 {role}",
+                "没有任何 agent 指向这张卡",
+                "要谁用它就写进 config.roles；不要了就删掉这张卡（或在 roles 里指向别处）",
+            ))
 
-    fallback = default_role(root, cfg_now)
     if fallback and not role_card(root, fallback).is_file():
         problems.append((
             1, "config.json",
@@ -2870,14 +2894,21 @@ _（待写：这个 agent 的底色。改它要告诉主人。）_
 }
 
 
-def cmd_init_agent(root: Path, agent: str, source: str | None = None) -> int:
-    """建一个 agent 的私有目录。
+def cmd_init_agent(root: Path, agent: str, source: str | None = None, role: str = "") -> int:
+    """建一个 agent 的私有目录，并给它配一张角色卡。
 
-    id 形如 <persona>-<harness>（moxie-wb / moxie-dsh）。不自动复制 SOUL：
-    SessionStart 保持只读，建目录是显式动作。要复制就 `--from`。
+    0.6.4 起人格是角色卡：这里**不再**往 `agents/<id>/` 写 SOUL.md，而是写
+    `roles/<role>/SOUL.md` 并在 `config.json` 的 `roles` 里补一条映射。
+    role 省略时用 agent id 本身当角色名（一个人一张卡）；要跟别的 agent 共用
+    同一张卡就显式 `--role`——卡已存在时沿用，不覆盖。
     """
     if not re.match(r"^[a-z0-9][a-z0-9-]*$", agent):
         print(f"agent id 不合法：{agent}（只允许小写字母、数字、连字符）")
+        return 1
+
+    role = (role or agent).strip().lower()
+    if not ROLE_RE.match(role):
+        print(f"角色名不合法：{role}（只允许小写字母、数字、连字符，1-32 位）")
         return 1
 
     folder = root / "agents" / agent
@@ -2885,35 +2916,58 @@ def cmd_init_agent(root: Path, agent: str, source: str | None = None) -> int:
         print(f"{folder} 已存在，不覆盖。")
         return 1
 
-    src = None
+    cfg = _config(root)
+
+    src_card = None
     if source:
         src = root / "agents" / source
         if not src.is_dir():
             print(f"源 agent 不存在：{src}")
+            return 1
+        src_role, _ = resolve_role(root, source, cfg)
+        if src_role and role_card(root, src_role).is_file():
+            src_card = role_card(root, src_role)
+        elif (src / ROLE_CARD).is_file():
+            src_card = src / ROLE_CARD
+        else:
+            print(f"源 agent {source} 没有可用的人格：既没有角色卡，也没有旧的 SOUL.md")
             return 1
 
     today = date.today().isoformat()
     harness = agent.rsplit("-", 1)[-1] if "-" in agent else "unknown"
 
     folder.mkdir(parents=True, exist_ok=True)
+    # log/ 留着：没有项目册时 log_dir_for() 会退回总册的 agents/<id>/log。
     (folder / "log").mkdir(exist_ok=True)
 
-    for name, tpl in AGENT_TEMPLATES.items():
-        if src and (src / name).is_file():
-            text = read(src / name)
-            text = text.rstrip("\n") + (
-                f"\n\n---\n\n_从 `agents/{source}/` 复制于 {today}。"
-                "之后两边独立演化，不自动同步。_\n"
-            )
+    card = role_card(root, role)
+    created = False
+    if card.is_file():
+        print(f"角色卡已存在，沿用：roles/{role}/SOUL.md")
+    else:
+        card.parent.mkdir(parents=True, exist_ok=True)
+        if src_card:
+            rel = src_card.relative_to(root).as_posix()
+            text = read(src_card).rstrip("\n") + "\n\n---\n\n_从 `" + rel + "` 复制于 " + today + "。"
+            text += "之后两边独立演化，不自动同步。_\n"
         else:
-            text = tpl.format(today=today, agent=agent, harness=harness)
-        (folder / name).write_text(text, encoding="utf-8", newline="\n")
+            text = AGENT_TEMPLATES["SOUL.md"].format(today=today, agent=agent, harness=harness)
+        card.write_text(text, encoding="utf-8", newline="\n")
+        created = True
+
+    roles_map = cfg.get("roles") if isinstance(cfg.get("roles"), dict) else {}
+    changed = roles_map.get(agent) != role
+    if changed:
+        roles_map = dict(roles_map)
+        roles_map[agent] = role
+        cfg["roles"] = roles_map
+        _write_config(root, cfg)
 
     print(f"已创建 agent：{folder}")
-    if src:
-        print(f"SOUL 复制自 {source}，末尾标了来源日期。")
-    else:
-        print("SOUL 是空模板，下一步写它——人格是主人的地盘。")
+    print(f"角色卡：roles/{role}/SOUL.md（{'新建' if created else '已存在'}）")
+    if changed:
+        print(f"config.roles 写入：{agent} → {role}")
+    print("下一步写这张卡——人格是主人的地盘（设置页「人格」可直接改）。")
     return 0
 
 
@@ -3410,7 +3464,7 @@ updated: {today}
     ))
 
     print(f"已创建空库：{target}")
-    print("下一步：写 README.md（协议），跑 `init --agent <id>` 建第一个人格目录。")
+    print("下一步：写 README.md（协议），跑 `init --agent <id> [--role <role>]` 建第一个 agent 与角色卡。")
     return 0
 
 
@@ -3459,9 +3513,9 @@ def main(argv: list[str]) -> int:
         if "--agent" in argv:
             agent = flag(argv, "--agent")
             if not agent:
-                print("用法：init --agent <id> [--from <id>]")
+                print("用法：init --agent <id> [--role <role>] [--from <id>]")
                 return 1
-            return cmd_init_agent(root, agent, flag(argv, "--from"))
+            return cmd_init_agent(root, agent, flag(argv, "--from"), flag(argv, "--role") or "")
         if "--project" in argv:
             target = flag(argv, "--project")
             if not target:

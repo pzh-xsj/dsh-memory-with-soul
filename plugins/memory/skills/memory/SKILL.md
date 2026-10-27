@@ -20,7 +20,7 @@ CLI 在 `<插件根>/core/memory.py`，十一个入口：
 | `workspaces --fix <id> <新路径>` | 路径丢了按 id 重绑 |
 | `timeline [--days N]` | 跨项目册日志时间线，默认 30 天 |
 | `init` | 建空库 |
-| `init --agent <id> [--from <id>]` | 建 agent 私有目录 |
+| `init --agent <id> [--role <role>] [--from <id>]` | 建 agent 目录 + 角色卡，并写 `config.roles` |
 | `init --project <路径> [--id <id>] [--title <标题>] [--kind <领域>]` | 建项目册 + git + 登记 + 同步索引。**`--kind` 没有默认值**：不传就永远不注入 playbook，checkup 会报缺 |
 
 > **2026-10-26 结构变了**：`shared/domains/` 已拆掉。可枚举的东西是三类——**项目册**（`<workspace>/.memory/`）、**playbooks**（`shared/playbooks/<领域>/<类型>.md`）、**topics**（`shared/topics/<主题>.md`）。`index --write` 维护这三张表。
