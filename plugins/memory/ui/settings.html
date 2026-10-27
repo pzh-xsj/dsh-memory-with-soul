@@ -298,6 +298,12 @@
 
 /* ================================================================ 基础工具 */
 
+/** 接口前缀。内置进 DSH 时服务端注入 `/api/memory`，独立运行时留空即 `/api`。 */
+const API_BASE = (window.__MEMORY_API_BASE__ || "/api").replace(/\/+$/, "");
+/** 同一件事两种来源，提示语别写死成 serve.py。 */
+const EMBEDDED = Boolean(window.__MEMORY_EMBEDDED__);
+const SERVER_HINT = EMBEDDED ? "由 DSH 插件的内置页面提供" : "跑 `python ui/serve.py`";
+
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
@@ -407,7 +413,11 @@ function setStatusbar() {
 
 async function api(path, opts) {
   opts = opts || {};
-  const res = await fetch(path, {
+  // 独立模式（ui/serve.py）走 /api/*；内置进 DSH 时由服务端注入
+  // window.__MEMORY_API_BASE__ = "/api/memory"，接口路径随之改前缀。
+  // 调用点仍写 "/api/xxx"，前缀替换只此一处。
+  const url = API_BASE + path.replace(/^\/api/, "");
+  const res = await fetch(url, {
     method: opts.method || "GET",
     headers: opts.body ? { "Content-Type": "application/json" } : undefined,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
@@ -566,7 +576,7 @@ async function showTab(name) {
 
 async function loadOverview(agent) {
   if (!S.server) {
-    $("#ovHint").textContent = "服务端没起来。跑 `python ui/serve.py`，或者从 serve.py 打开的地址访问这一页。";
+    $("#ovHint").textContent = "服务端没起来。" + (EMBEDDED ? "重启 DSH 让插件重新注册路由。" : "跑 `python ui/serve.py`，或者从 serve.py 打开的地址访问这一页。");
     $("#ovMode").textContent = "（未连接）";
     return;
   }
@@ -609,14 +619,14 @@ function renderConn() {
   kv.replaceChildren();
   const rows = [
     ["记忆库", S.root || "—"],
-    ["服务端", S.server ? "python ui/serve.py" : "未连接（只读预览 / 目录授权写入）"],
+    ["服务端", S.server ? (EMBEDDED ? "DSH 插件内置" : "python ui/serve.py") : "未连接（只读预览 / 目录授权写入）"],
     ["本地目录", S.handle ? S.handle.name : "未连接"],
     ["config", S.overview && S.overview.config ? "已加载" : "—"],
   ];
   for (const [k, v] of rows) kv.append(h("dt", { text: k }), h("dd", { class: "mono", text: v }));
   $("#ovHint").textContent = S.server
     ? "服务端数据来自 core/memory.py 现算。结构化写入（项目册元信息、人格、设置）带备份和冲突检测。"
-    : "从 serve.py 打开才能看到真实数据；直接双击 html 只能做目录授权后的自由文本编辑。";
+    : (EMBEDDED ? "插件路由没注册上，重启 DSH 再看。" : "从 serve.py 打开才能看到真实数据；直接双击 html 只能做目录授权后的自由文本编辑。");
 }
 
 function renderInjection(inj) {
@@ -1064,7 +1074,7 @@ async function loadProjectList() {
   sel.replaceChildren();
   if (!S.server) {
     sel.append(h("option", { value: "", text: "（需要服务端）" }));
-    setMetaHint("项目册元信息要靠服务端写：跑 `python ui/serve.py`");
+    setMetaHint("项目册元信息要靠服务端写：" + SERVER_HINT);
     return;
   }
   const projects = (S.overview && S.overview.projects) || [];
@@ -1172,7 +1182,7 @@ $("#pmSave").addEventListener("click", async () => {
 
 async function loadCheckup() {
   if (!S.server) {
-    $("#ckBody").replaceChildren(h("p", { class: "empty", text: "体检要靠服务端跑：python ui/serve.py" }));
+    $("#ckBody").replaceChildren(h("p", { class: "empty", text: "体检要靠服务端跑：" + SERVER_HINT }));
     $("#ckSummary").textContent = "未连接";
     return;
   }
@@ -1285,7 +1295,7 @@ function fillConfigInputs(cfg, defaults) {
 async function loadConfigForm() {
   const hint = $("#cfgHint");
   if (!S.server) {
-    hint.textContent = "设置要靠服务端写：python ui/serve.py";
+    hint.textContent = "设置要靠服务端写：" + SERVER_HINT;
     $("#cfgSave").disabled = true;
     return;
   }
@@ -1411,7 +1421,7 @@ async function boot() {
     S.loaded.add("overview");
   } else {
     $("#ovHint").textContent =
-      "没连上服务端。跑 `python ui/serve.py` 会开这一页并带上真实数据；"
+      (EMBEDDED ? "没连上插件路由，重启 DSH 再看；" : "没连上服务端。跑 `python ui/serve.py` 会开这一页并带上真实数据；")
       + "现在只能用「连接本地目录…」做自由文本编辑。";
     $("#ovMode").textContent = "本地目录模式";
   }

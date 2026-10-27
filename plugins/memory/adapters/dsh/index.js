@@ -28,6 +28,8 @@ import { existsSync } from 'node:fs'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { pageUrl, registerMemoryUi } from './web.js'
+
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PLUGIN_ROOT = join(HERE, '..', '..')
 
@@ -54,6 +56,8 @@ const DEFAULTS = {
   /** 回合结束时判断要不要提醒提炼（对应 WB 的 Stop hook）。 */
   digest: true,
   digestSubagents: false,
+  /** 把设置页挂到 DSH 自己的端口下（/api/memory/ui）。 */
+  webUi: true,
   /** 渲染器工作目录，只影响相对路径解析，与 --cwd 无关。 */
   cwd: PLUGIN_ROOT,
 }
@@ -82,6 +86,20 @@ function coreCandidates(cfg) {
   const list = [join(PLUGIN_ROOT, 'core', 'memory.py')]
   if (cfg.sourceRoot !== '') list.push(join(cfg.sourceRoot, 'core', 'memory.py'))
   return [...new Set(list)]
+}
+
+/** `ui/api.py` 的候选路径：内置设置页每个请求都跑它一次。 */
+function apiCandidates(cfg) {
+  const list = [join(PLUGIN_ROOT, 'ui', 'api.py')]
+  if (cfg.sourceRoot !== '') list.push(join(cfg.sourceRoot, 'ui', 'api.py'))
+  return [...new Set(list)]
+}
+
+/** `ui/` 目录：内置设置页要从这里读 html 与 css。 */
+function pagesDirOf(cfg) {
+  const list = [join(PLUGIN_ROOT, 'ui')]
+  if (cfg.sourceRoot !== '') list.push(join(cfg.sourceRoot, 'ui'))
+  return list.find((path) => existsSync(join(path, 'settings.html')))
 }
 
 /**
@@ -117,6 +135,7 @@ function normalize(ctx, raw) {
   bool('trackAccess')
   bool('digest')
   bool('digestSubagents')
+  bool('webUi')
   text('renderer')
   text('sourceRoot')
   text('harness')
@@ -259,6 +278,20 @@ async function runCore(ctx, cfg, args, options = {}) {
     return null
   }
   return run(ctx, cfg, candidate, args, options)
+}
+
+/**
+ * 跑一次 `ui/api.py`：内置设置页的每个接口请求都走这里。
+ *
+ * 超时给到 15s——overview 要跑一遍渲染器，比 track 重得多。
+ */
+async function runApi(ctx, cfg, args) {
+  const candidate = apiCandidates(cfg).find((path) => existsSync(path))
+  if (candidate === undefined) {
+    warnOnce(ctx, 'api', '找不到 ui/api.py，内置设置页的接口不可用')
+    return null
+  }
+  return run(ctx, cfg, candidate, args, { timeoutMs: Math.min(cfg.timeoutMs, 15000) })
 }
 
 /**
@@ -448,5 +481,29 @@ export function apply(ctx, config) {
         }
       })
     })
+  }
+
+  // 设置页：挂到宿主自己的端口下，不再起 127.0.0.1:8765。
+  // 注册要等 connection 就绪；`ctx.inject` 在依赖到位时回调一次。
+  if (cfg.webUi) {
+    const pagesDir = pagesDirOf(cfg)
+    if (pagesDir === undefined) {
+      warnOnce(ctx, 'pages', '找不到 ui/settings.html，内置设置页不注册')
+    } else {
+      ctx.inject(['connection'], (inner) => {
+        try {
+          registerMemoryUi(inner, {
+            pagesDir,
+            exec: (args) => runApi(ctx, cfg, args),
+            logger: ctx.logger,
+          })
+          const port = ctx.get('webServer')?.port
+          ctx.logger.info(`memory-ui: 设置页 ${pageUrl(port)}`)
+        } catch (error) {
+          // 注册失败不该拖垮插件：注入、戳记、提醒都还该正常工作
+          ctx.logger.warn(`memory-ui: 注册失败：${String(error)}`)
+        }
+      })
+    }
   }
 }

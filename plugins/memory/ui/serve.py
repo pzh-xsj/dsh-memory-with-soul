@@ -346,6 +346,19 @@ def write_soul(root: Path, agent: str, text: str, expect_mtime) -> dict:
             "bytes": len(text.encode("utf-8")), "mtime": p.stat().st_mtime}
 
 
+def apply_project_meta(root: Path, data: dict) -> dict:
+    """写项目册 `_meta.md` 的可编辑字段。
+
+    抽成函数是为了让 HTTP 处理器与 `ui/api.py`（DSH 内置路由的子进程入口）
+    共用同一份写前备份与冲突检测——两处各写一遍，早晚有一处忘了备份。
+    """
+    book = project_book(str(data.get("path", "")))
+    meta = book / "_meta.md"
+    fields = data.get("fields") or {}
+    backup(meta, root)
+    return mem.write_project_meta(meta, fields, expect_mtime=fields.get("mtime"))
+
+
 class Handler(SimpleHTTPRequestHandler):
     server_version = "memory-ui/1.0"
     root: Path = Path(".")   # make_server 里填，别在别处改
@@ -449,12 +462,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._ok(write_soul(
                     root, str(data.get("agent", "")), data.get("text", ""), data.get("mtime")))
 
-            book = project_book(str(data.get("path", "")))
-            meta = book / "_meta.md"
-            fields = data.get("fields") or {}
-            backup(meta, root)
-            res = mem.write_project_meta(meta, fields, expect_mtime=fields.get("mtime"))
-            return self._ok(res)
+            return self._ok(apply_project_meta(root, data))
         except mem.MetaError as exc:
             status = {"invalid": 400, "conflict": 409, "missing": 404}.get(exc.code, 400)
             return self._error(status, exc.message, exc.code)

@@ -18,12 +18,18 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PLUGIN_ROOT = resolve(HERE, '..', '..')
 const RENDERER = join(PLUGIN_ROOT, 'hooks', 'session-start.py')
+const API_CLIENT = join(PLUGIN_ROOT, 'ui', 'api.py')
 const verbose = process.argv.includes('--verbose')
 
 const checks = []
 function check(name, fn) {
   try {
     const detail = fn()
+    if (detail !== null && typeof detail?.then === 'function') {
+      // 异步检查（要 import 新模块）单独收，否则 detail 会记成 [object Promise]
+      checks.push({ ok: true, name, detail: '…', pending: detail })
+      return
+    }
     checks.push({ ok: true, name, detail })
   } catch (error) {
     checks.push({ ok: false, name, detail: String(error?.message ?? error) })
@@ -203,7 +209,63 @@ check('渲染器 / --dry 不写状态', () => {
   return 'ok'
 })
 
+check('内置设置页 / web.js 路由表合法', async () => {
+  const web = await import(pathToFileURL(join(HERE, 'web.js')).href)
+  must(typeof web.registerMemoryUi === 'function', 'web.js 没导出 registerMemoryUi')
+  must(web.API_PREFIX === '/api/memory', `前缀不是 /api/memory：${web.API_PREFIX}`)
+
+  // 真注册一遍，顺手验证「路径落在 /api 下 + 不重复」
+  const registered = []
+  const ctx = {
+    effect: (callback) => callback(),
+    connection: {
+      fetch: {
+        register: (route) => {
+          if (registered.some((item) => item.path === route.path)) {
+            throw new Error(`重复注册 ${route.path}`)
+          }
+          registered.push(route)
+          return () => {}
+        },
+      },
+    },
+    logger: { warn: () => {}, info: () => {} },
+  }
+  web.registerMemoryUi(ctx, { pagesDir: join(HERE, '..', '..', 'ui'), exec: async () => null, logger: ctx.logger })
+
+  must(registered.length === 9, `注册了 ${String(registered.length)} 条，期望 9`)
+  for (const route of registered) {
+    must(route.path.startsWith('/api/'), `路由不在 /api 下：${route.path}`)
+    const segments = route.path.slice('/api/'.length).split('/')
+    must(segments.every((seg) => /^[A-Za-z0-9_$.-]+$/.test(seg)), `路径段不合法：${route.path}`)
+    must(Array.isArray(route.methods) && route.methods.length > 0, `${route.path} 没有 methods`)
+    must(route.requestBody === 'buffered', `${route.path} 缺 requestBody`)
+    must(typeof route.fetch === 'function', `${route.path} 没有 fetch`)
+  }
+  return `${String(registered.length)} 条`
+})
+
+check('内置设置页 / api.py 与 serve.py 共用实现', () => {
+  const client = readFileSync(API_CLIENT, 'utf8')
+  must(/import serve/.test(client), 'api.py 没复用 ui/serve.py')
+  must(/read_body\(argv\)/.test(client), 'api.py 没按 --body-file 读请求体')
+  return 'ok'
+})
+
 // ---------------------------------------------------------------- 报表
+
+// 异步检查跑完再统计
+for (const item of checks) {
+  if (item.pending === undefined) continue
+  try {
+    item.detail = await item.pending
+    item.ok = true
+  } catch (error) {
+    item.ok = false
+    item.detail = String(error?.message ?? error)
+  }
+  delete item.pending
+}
 
 let failed = 0
 for (const item of checks) {
