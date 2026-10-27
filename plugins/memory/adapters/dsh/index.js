@@ -1,19 +1,31 @@
 /**
- * memory-inject — DSH 宿主插件：会话创建时把记忆注入 agent 收件箱。
+ * memory-inject — DSH 宿主插件：把记忆系统接进 DSH 的三个生命周期点。
  *
- * 渲染器与 WorkBuddy 完全共用：hooks/session-start.py --dry --cwd <cwd>。
- * 本文件只负责三件事：找到 cwd、跑渲染器、把结果经 agent.inject() 送进会话。
+ *   1. 会话开始（agent/created）→ 注入 `<memory-context>`
+ *   2. 工具调用（session/event tool/call）→ 记录记忆库文件被读过
+ *   3. 回合结束（session/event turn/end）→ 判断要不要提醒提炼
  *
- * 为什么走 agent.inject()：DSH 的 session log 是唯一事实源，注入必须记为
+ * 三个渲染/判定都只调 `core/memory.py`，本文件不实现业务逻辑：
+ *   注入   → hooks/session-start.py --dry --cwd <cwd>
+ *   戳记   → core/memory.py track --paths ...
+ *   提醒   → core/memory.py digest --agent ... --turns N --session ... --json
+ *
+ * 为什么注入走 agent.inject()：DSH 的 session log 是唯一事实源，注入必须记为
  * `agent/inbox/spliced` 事件，fork / resume / replay 才复现得出来。直接改
  * system prompt 会绕开这个机制。
  *
  * 时序：`agent/created` 是 serial 派发，监听器返回的 Promise 会被 await，
  * 所以这里可以 await 子进程：注入一定赶在第一步之前进入收件箱。
+ *
+ * 事件形状（宿主 lib/session 的类型表）：
+ *   'tool/call': { turn, step, callId, name, arguments: string }
+ *   'turn/end' : { turn, reason }
+ * session/event 的 payload 是 (session, event)；重放/恢复的事件带 surfaceOp，
+ * 只处理 surfaceOp === 'append' 的实时事件，否则 resume 一次就重跑一遍提醒。
  */
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -37,9 +49,20 @@ const DEFAULTS = {
   timeoutMs: 10000,
   /** 子 agent 默认不注入：每个 subagent 多一份记忆就是实付 token。 */
   injectSubagents: false,
+  /** 记录记忆库文件被读过（对应 WB 的 PostToolUse hook）。 */
+  trackAccess: true,
+  /** 回合结束时判断要不要提醒提炼（对应 WB 的 Stop hook）。 */
+  digest: true,
+  digestSubagents: false,
   /** 渲染器工作目录，只影响相对路径解析，与 --cwd 无关。 */
   cwd: PLUGIN_ROOT,
 }
+
+/** 读类工具名。DSH 内置的是 read / ops_read_files，斜杠写法兼容其他实现。 */
+const READ_TOOLS = new Set(['read', 'ops_read_files', 'Read', 'ops.read'])
+
+/** track 子进程的并发上限：一次会话读十几个文件时不该起十几个 python。 */
+const MAX_CONCURRENT_CORE = 2
 
 /**
  * 渲染器的候选路径。DSH 用 pnpm 装本地目录时通常留软链，PLUGIN_ROOT 就是源码目录；
@@ -51,6 +74,13 @@ function rendererCandidates(cfg) {
   if (cfg.renderer !== '') list.push(cfg.renderer)
   list.push(join(PLUGIN_ROOT, 'hooks', 'session-start.py'))
   if (cfg.sourceRoot !== '') list.push(join(cfg.sourceRoot, 'hooks', 'session-start.py'))
+  return [...new Set(list)]
+}
+
+/** core/memory.py 的候选路径，找法与渲染器一致。 */
+function coreCandidates(cfg) {
+  const list = [join(PLUGIN_ROOT, 'core', 'memory.py')]
+  if (cfg.sourceRoot !== '') list.push(join(cfg.sourceRoot, 'core', 'memory.py'))
   return [...new Set(list)]
 }
 
@@ -84,6 +114,9 @@ function normalize(ctx, raw) {
 
   bool('enabled')
   bool('injectSubagents')
+  bool('trackAccess')
+  bool('digest')
+  bool('digestSubagents')
   text('renderer')
   text('sourceRoot')
   text('harness')
@@ -112,29 +145,37 @@ function warnOnce(ctx, key, message) {
   ctx.logger.warn(`memory-inject: ${message}`)
 }
 
+let cachedPython
 async function resolvePython(ctx, cfg) {
+  if (cachedPython !== undefined) return cachedPython
   for (const candidate of cfg.python) {
     if (/[\\/]/.test(candidate)) {
-      if (existsSync(candidate)) return candidate
+      if (existsSync(candidate)) {
+        cachedPython = candidate
+        return cachedPython
+      }
       continue
     }
     try {
       const resolved = await ctx.subprocess.resolveExecutable(candidate)
-      if (typeof resolved === 'string' && resolved !== '') return resolved
+      if (typeof resolved === 'string' && resolved !== '') {
+        cachedPython = resolved
+        return cachedPython
+      }
     } catch {
       // 继续试下一个候选
     }
   }
+  cachedPython = null
   return null
 }
 
-async function render(ctx, cfg, cwd) {
-  const candidates = rendererCandidates(cfg)
-  const renderer = candidates.find((path) => existsSync(path))
-  if (renderer === undefined) {
-    warnOnce(ctx, 'renderer', `找不到渲染器，试过：${candidates.join(' | ')}`)
-    return null
-  }
+/**
+ * 跑一次 core/memory.py。返回 `{ code, stdout, stderr }`；拿不到 python 或脚本时返回 null。
+ *
+ * 三个生命周期点共用它：注入走渲染器（session-start.py），其余两个走 CLI 子命令。
+ */
+async function run(ctx, cfg, script, args, options = {}) {
   const python = await resolvePython(ctx, cfg)
   if (python === null) {
     warnOnce(ctx, 'python', `找不到 python（试过：${cfg.python.join(', ')}）`)
@@ -150,7 +191,7 @@ async function render(ctx, cfg, cwd) {
   if (cfg.agentName !== '') env.MEMORY_AGENT = cfg.agentName
 
   const handle = ctx.subprocess.spawn({
-    argv: [python, renderer, '--dry', '--cwd', cwd],
+    argv: [python, script, ...args],
     cwd: existsSync(cfg.cwd) ? cfg.cwd : PLUGIN_ROOT,
     env,
     stdio: {
@@ -162,9 +203,10 @@ async function render(ctx, cfg, cwd) {
   })
 
   // subprocess 的 graceMs 是「终止后到强杀」的宽限，不是超时，得自己掐表
+  const timeout = options.timeoutMs ?? cfg.timeoutMs
   const timer = setTimeout(() => {
     void Promise.resolve(handle.terminate()).catch(() => {})
-  }, cfg.timeoutMs)
+  }, timeout)
 
   let outcome
   try {
@@ -173,15 +215,30 @@ async function render(ctx, cfg, cwd) {
     clearTimeout(timer)
   }
 
-  const stdout = handle.collected.stdout?.readFrom(0)?.text ?? ''
-  const stderr = handle.collected.stderr?.readFrom(0)?.text ?? ''
-  if (stderr.trim() !== '') ctx.logger.info(`memory-inject: 渲染器 stderr: ${stderr.trim()}`)
-  if (outcome.exitCode !== 0) {
-    warnOnce(ctx, `exit-${String(outcome.exitCode)}`, `渲染器退出码 ${String(outcome.exitCode)}，本次不注入`)
+  return {
+    code: outcome.exitCode ?? 0,
+    stdout: handle.collected.stdout?.readFrom(0)?.text ?? '',
+    stderr: handle.collected.stderr?.readFrom(0)?.text ?? '',
+  }
+}
+
+async function render(ctx, cfg, cwd) {
+  const candidates = rendererCandidates(cfg)
+  const renderer = candidates.find((path) => existsSync(path))
+  if (renderer === undefined) {
+    warnOnce(ctx, 'renderer', `找不到渲染器，试过：${candidates.join(' | ')}`)
     return null
   }
 
-  const text = stdout.trim()
+  const result = await run(ctx, cfg, renderer, ['--dry', '--cwd', cwd])
+  if (result === null) return null
+  if (result.stderr.trim() !== '') ctx.logger.info(`memory-inject: 渲染器 stderr: ${result.stderr.trim()}`)
+  if (result.code !== 0) {
+    warnOnce(ctx, `exit-${String(result.code)}`, `渲染器退出码 ${String(result.code)}，本次不注入`)
+    return null
+  }
+
+  const text = result.stdout.trim()
   if (text === '') {
     warnOnce(ctx, 'empty', '渲染器没有输出，本次不注入')
     return null
@@ -190,6 +247,18 @@ async function render(ctx, cfg, cwd) {
     warnOnce(ctx, 'marker', '渲染器输出缺少 <memory-context> 头，仍然注入')
   }
   return text
+}
+
+/**
+ * 跑一个 CLI 子命令。找不到 core/memory.py 时静默跳过（只 toast 一次）。
+ */
+async function runCore(ctx, cfg, args, options = {}) {
+  const candidate = coreCandidates(cfg).find((path) => existsSync(path))
+  if (candidate === undefined) {
+    warnOnce(ctx, 'core', '找不到 core/memory.py，记忆的戳记与提醒不可用')
+    return null
+  }
+  return run(ctx, cfg, candidate, args, options)
 }
 
 /**
@@ -209,15 +278,86 @@ export function injectedMessage(text) {
   }
 }
 
-async function injectFor(ctx, cfg, done, event) {
-  const agent = event?.agent
+/** 提炼提醒的消息。kind 与注入分开，方便在会话里一眼看出是哪一类。 */
+export function reminderMessage(text) {
+  return {
+    id: randomUUID(),
+    role: 'user',
+    content: [{ type: 'text', text }],
+    source: { kind: 'memory-digest' },
+  }
+}
+
+/**
+ * 从 tool/call 的参数里抽出「读了哪些文件」。
+ *
+ * DSH 内置工具：`read` 收 `{ file_path }`，`ops_read_files` 收 `{ files: [{ path, offset, limit }] }`。
+ * 参数是 JSON 字符串，解析失败就当没读过——戳记不是关键路径，不值得抛错。
+ */
+export function readPaths(name, argsJson) {
+  if (!READ_TOOLS.has(name)) return []
+  let args
+  try {
+    args = typeof argsJson === 'string' ? JSON.parse(argsJson) : argsJson
+  } catch {
+    return []
+  }
+  if (args === null || typeof args !== 'object') return []
+
+  const out = []
+  for (const key of ['file_path', 'path', 'filePath']) {
+    if (typeof args[key] === 'string' && args[key] !== '') out.push(args[key])
+  }
+  if (Array.isArray(args.files)) {
+    for (const item of args.files) {
+      if (item && typeof item === 'object' && typeof item.path === 'string' && item.path !== '') out.push(item.path)
+    }
+  }
+  return [...new Set(out)]
+}
+
+/** session -> agent。session/event 只给 session，要发提醒得先找回 agent。 */
+const sessionAgents = new WeakMap()
+
+function agentOf(session) {
+  return sessionAgents.get(session)
+}
+
+function isSubagent(agent) {
+  const origin = agent.session?.header?.origin
+  return origin === 'subagent' || origin === 'subagent-deep'
+}
+
+/** 简单并发闸：track 不该因为一次会话读了很多文件而堆几十个子进程。 */
+function createLimiter(max) {
+  let running = 0
+  const queue = []
+  const pump = () => {
+    while (running < max && queue.length > 0) {
+      const job = queue.shift()
+      running += 1
+      Promise.resolve()
+        .then(job)
+        .catch(() => {})
+        .finally(() => {
+          running -= 1
+          pump()
+        })
+    }
+  }
+  return (job) => {
+    queue.push(job)
+    pump()
+  }
+}
+
+async function injectMemory(ctx, cfg, agent, done) {
   if (!agent || typeof agent.inject !== 'function') return
   if (done.has(agent)) return
   done.add(agent)
+  if (!cfg.injectSubagents && isSubagent(agent)) return
 
   const header = agent.session?.header ?? {}
-  if (!cfg.injectSubagents && header.origin === 'subagent') return
-
   const cwd = typeof header.cwd === 'string' && header.cwd !== '' ? header.cwd : process.cwd()
   const text = await render(ctx, cfg, cwd)
   if (text === null) return
@@ -226,19 +366,87 @@ async function injectFor(ctx, cfg, done, event) {
   await agent.inject(injectedMessage(text))
 }
 
+function sessionIdOf(agent) {
+  const id = agent.session?.header?.id
+  return typeof id === 'string' && id !== '' ? id : 'unknown'
+}
+
 export function apply(ctx, config) {
   const cfg = normalize(ctx, config)
   if (!cfg.enabled) {
     ctx.logger.info('memory-inject: disabled by config')
     return
   }
-  const done = new WeakSet()
+  const injected = new WeakSet()
+  const enqueue = createLimiter(MAX_CONCURRENT_CORE)
+
   ctx.on('agent/created', async (event) => {
     // serial 派发会 await 这个 Promise；抛出会让整个 agent 创建回滚，所以必须吞
     try {
-      await injectFor(ctx, cfg, done, event)
+      const agent = event?.agent
+      if (agent?.session) sessionAgents.set(agent.session, agent)
+      await injectMemory(ctx, cfg, agent, injected)
     } catch (error) {
       ctx.logger.warn(`memory-inject: 注入失败：${String(error)}`)
     }
   })
+
+  ctx.on('agent/disposed', (event) => {
+    const session = event?.agent?.session
+    if (session) sessionAgents.delete(session)
+  })
+
+  // 访问戳记：记忆库里的子文件不在注入清单里，没这个记录就永远不知道哪些被读过。
+  if (cfg.trackAccess) {
+    ctx.on('session/event', (session, event) => {
+      if (event.surfaceOp !== 'append') return
+      if (event.type !== 'tool/call') return
+      const agent = agentOf(session)
+      if (agent === undefined) return
+      if (!cfg.injectSubagents && isSubagent(agent)) return
+
+      const paths = readPaths(event.data?.name, event.data?.arguments)
+      if (paths.length === 0) return
+
+      enqueue(async () => {
+        await runCore(ctx, cfg, ['track', '--paths', paths.join(delimiter), '--agent', cfg.agentName || ''], {
+          timeoutMs: Math.min(cfg.timeoutMs, 5000),
+        })
+      })
+    })
+  }
+
+  // 提炼提醒：回合结束时问一次 core，命中就往会话里塞一条提醒。
+  if (cfg.digest) {
+    ctx.on('session/event', (session, event) => {
+      if (event.surfaceOp !== 'append') return
+      if (event.type !== 'turn/end') return
+      const agent = agentOf(session)
+      if (agent === undefined || typeof agent.inject !== 'function') return
+      if (!cfg.digestSubagents && isSubagent(agent)) return
+
+      const header = agent.session?.header ?? {}
+      const cwd = typeof header.cwd === 'string' && header.cwd !== '' ? header.cwd : process.cwd()
+      const turns = Number(event.data?.turn ?? 0)
+
+      enqueue(async () => {
+        try {
+          const result = await runCore(ctx, cfg, [
+            'digest',
+            '--agent', cfg.agentName !== '' ? cfg.agentName : '',
+            '--cwd', cwd,
+            '--turns', String(Number.isFinite(turns) ? turns : 0),
+            '--session', sessionIdOf(agent),
+            '--json',
+          ])
+          if (result === null || result.code !== 2) return
+          const parsed = JSON.parse(result.stdout)
+          if (parsed?.should !== true || typeof parsed.text !== 'string' || parsed.text === '') return
+          await agent.inject(reminderMessage(parsed.text))
+        } catch (error) {
+          ctx.logger.warn(`memory-inject: 提炼提醒失败：${String(error)}`)
+        }
+      })
+    })
+  }
 }

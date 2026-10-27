@@ -15,6 +15,11 @@
     python memory.py workspaces          列登记的项目册
     python memory.py workspaces --fix <id> <新路径>    路径丢了按 id 重绑
     python memory.py timeline [--days N] 跨项目册日志时间线（默认 30 天）
+    python memory.py digest --agent <id> [--cwd 路径] [--turns N] [--session <id>] [--json]
+                                         判断现在要不要提醒提炼（命中退出码 2，stdout 是文案）
+    python memory.py track --paths <文件>  把读过的记忆文件戳成今天（DSH 的 PostToolUse 调）
+    python memory.py skills [--install] [--mode copy|link]
+                                         把插件自带的 skill 装进 ~/.dsh/skills/
     python memory.py init [路径]         初始化新库
     python memory.py init --agent <id> [--from <id>]        建一个 agent 的私有目录
     python memory.py init --project <路径> [--id <id>] [--title <标题>] [--kind <领域>]
@@ -31,10 +36,11 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from hashlib import sha1
 from pathlib import Path
 
@@ -51,18 +57,38 @@ if sys.platform == "win32":
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
 try:
     from _state import (
+        extraction_state,
         find_project_book,
+        last_write_ms,
         load_config,
+        log,
         log_dir_for,
+        read_state,
+        read_text,
+        relative_to_root,
         resolve_agent,
+        session_agent,
+        state_name,
+        touch_access,
         unextracted,
+        write_state,
     )
 except Exception:  # 单独拷走 core/ 时仍能跑，只是少了提炼检查
+    extraction_state = None
     find_project_book = None
+    last_write_ms = None
     load_config = None
+    log = None
     log_dir_for = None
+    read_state = None
+    read_text = None
+    relative_to_root = None
     resolve_agent = None
+    session_agent = None
+    state_name = None
+    touch_access = None
     unextracted = None
+    write_state = None
 
 # ---------------------------------------------------------------- 常量
 
@@ -1563,6 +1589,333 @@ def cmd_checkup(root: Path, all_projects: bool = False) -> int:
     return r["exitCode"]
 
 
+# ---------------------------------------------------------------- 命令：digest
+#
+# 提炼提醒的判定逻辑只有这一份：WB 的 hooks/stop.py 与 DSH 的 Stop 都调
+# `digest_check`，只是把结果打成各自 harness 认的外壳。以前它在 stop.py 里，
+# WB 一旦冻结，DSH 侧就得抄一遍——抄一遍就是两个真相源。
+
+# 提醒状态里最多保留多少条「会话 → 次数」记录
+DIGEST_SESSION_RECORDS = 20
+
+
+def _check_today_log(log_dir: Path) -> tuple[int, str] | None:
+    """今天日志有结论但没交代提炼，返回 (结论条数, 状态)。"""
+    p = log_dir / f"{date.today().isoformat()}.md"
+    if not p.is_file():
+        return None
+    state, n = extraction_state(read_text(p))
+    if n > 0 and state in {"missing", "none_bare"}:
+        return n, state
+    return None
+
+
+def _load_digest(root: Path, agent: str) -> dict:
+    """读本 agent 的提醒状态；第一次生成时用旧的全局值播种。
+
+    不播种的话，升级那一刻所有 agent 的 lastNudge 都是空的，
+    会连环弹提醒——升级不该变成骚扰。
+    """
+    name = state_name(agent, "digest.json")
+    state = read_state(root, name)
+    if state:
+        return state
+
+    legacy = read_state(root, "digest.json")
+    if legacy.get("lastNudge"):
+        log(f"用旧全局 lastNudge 播种 {name}")
+        return {"sessions": {}, "lastNudge": legacy["lastNudge"], "seeded_from": "digest.json"}
+    return {}
+
+
+def digest_check(
+    root: Path,
+    agent: str,
+    cwd: str | Path | None = None,
+    turns: int = 0,
+    session_id: str = "unknown",
+) -> dict:
+    """判断现在要不要提醒提炼记忆。命中时顺手写状态（冷却 + 本会话次数）。
+
+    返回 `{should, text, kind, code}`：
+    - `kind` 取 `extract`（今天日志没提炼）/ `stale`（库久未写）
+    - `code` 是机器可读的原因：disabled / cooldown / session_used /
+      no_write_time / few_turns / stale
+
+    两道门控（冷却 360 分钟、每会话最多 1 次）在判定内部处理，
+    调用方不需要自己数次数。
+    """
+    result = {"should": False, "text": "", "kind": "", "code": ""}
+
+    if load_config is None:
+        result["code"] = "no_state_module"
+        return result
+
+    config = load_config(root)
+    digest = config.get("digest", {})
+    if not digest.get("enabled", True):
+        result["code"] = "disabled"
+        return result
+
+    after_min = int(digest.get("afterMinutes", 180))
+    min_turns = int(digest.get("minTurns", 3))
+    cooldown_min = int(digest.get("cooldownMinutes", 360))
+    max_per_session = int(digest.get("maxPerSession", 1))
+
+    now = datetime.now()
+    state = _load_digest(root, agent)
+
+    last_nudge = state.get("lastNudge", "")
+    if last_nudge:
+        try:
+            if now - datetime.fromisoformat(last_nudge) < timedelta(minutes=cooldown_min):
+                log(f"{agent} 冷却中，跳过")
+                result["code"] = "cooldown"
+                return result
+        except ValueError:
+            pass
+
+    sessions = state.get("sessions", {})
+    used = int(sessions.get(session_id, 0))
+    if used >= max_per_session:
+        result["code"] = "session_used"
+        return result
+
+    project = find_project_book(cwd) if cwd else None
+    log_dir = log_dir_for(project, root, agent)
+
+    # 第一优先：今天的日志有没有提炼
+    pending = _check_today_log(log_dir)
+    if pending:
+        n, st = pending
+        why = "缺 `提炼：` 标记" if st == "missing" else "只写了「无」，没说理由"
+        result.update(
+            should=True,
+            kind="extract",
+            text=(
+                f"【提炼提醒】{agent} 今天的日志有 {n} 条结论，{why}。\n"
+                "现在把结论提炼进项目册对应文件（`world.md` / `characters.md` / "
+                "`playbooks/...`），然后在日志末尾补一行：\n"
+                "`提炼：文件名` 或 `提炼：无（为什么不用提炼）`。\n"
+                "只写「无」不算——那和没写分不出来。写完继续手头的事，不要开新任务。"
+            ),
+        )
+    else:
+        # 第二优先：记忆库多久没写
+        lw = last_write_ms(root, project)
+        if not lw:
+            log("读不到写入时间，跳过")
+            result["code"] = "no_write_time"
+            return result
+        stale_min = (now.timestamp() * 1000 - lw) / 60000
+        if stale_min < after_min:
+            log(f"记忆库 {stale_min:.0f} 分钟前刚写过，不提醒")
+            return result
+        if turns < min_turns:
+            log(f"会话只有 {turns} 轮，不提醒")
+            result["code"] = "few_turns"
+            return result
+
+        hours = stale_min / 60
+        result.update(
+            should=True,
+            kind="stale",
+            text=(
+                f"【记忆提醒】距上次写入记忆库已 {hours:.1f} 小时。\n"
+                "如果这次会话有值得留下的东西——决定、结论、踩过的坑、改过的设定——"
+                "现在写进项目册。没有的话，在当天日志记一条「无新增」并说明原因，"
+                "这样同一段时间内不会再提醒。写完继续手头的事，不要开新任务。"
+            ),
+        )
+
+    sessions[session_id] = used + 1
+    if len(sessions) > DIGEST_SESSION_RECORDS:
+        for key in list(sessions)[: len(sessions) - DIGEST_SESSION_RECORDS]:
+            sessions.pop(key, None)
+    state["sessions"] = sessions
+    state["lastNudge"] = now.isoformat(timespec="seconds")
+    state["agent"] = agent
+    write_state(root, state_name(agent, "digest.json"), state)
+    log(f"{agent} 提醒已发出（{result['kind']}）")
+    return result
+
+
+def cli_agent(root: Path, argv: list[str]) -> str:
+    """命令行里判断「我是谁」。
+
+    顺序：`--agent` > 环境变量 `MEMORY_AGENT` > 由 `MEMORY_HARNESS` 推出的
+    `<defaultAgent>-<harness>`。插件只设环境变量，不必知道 agent 全名。
+    """
+    given = flag(argv, "--agent")
+    if given:
+        return given
+
+    env = os.environ.get("MEMORY_AGENT", "").strip()
+    if env:
+        return env
+
+    harness = os.environ.get("MEMORY_HARNESS", "").strip()
+    if harness:
+        cfg = load_config(root) if load_config else {}
+        base = str(cfg.get("defaultAgent") or "default")
+        return f"{base}-{harness}"
+    return ""
+
+
+def cmd_digest(root: Path, argv: list[str]) -> int:
+    """判定一次提炼提醒。命中时 stdout 只有一句提醒文案，退出码 2。
+
+    DSH 的 Stop 用它：`--agent` 必填（插件从会话里读），`--turns` 是真实轮数。
+    命中才输出，未命中输出为空、退出码 0——这样插件可以 `\"$(cmd)\"` 直接用。
+    """
+    agent = cli_agent(root, argv)
+    if not agent:
+        print("用法：digest --agent <id> [--cwd <路径>] [--turns N] [--session <id>] [--json]")
+        return 1
+
+    t = flag(argv, "--turns")
+    r = digest_check(
+        root,
+        agent,
+        cwd=flag(argv, "--cwd") or os.getcwd(),
+        turns=int(t) if t and t.lstrip("-").isdigit() else 0,
+        session_id=flag(argv, "--session") or "unknown",
+    )
+
+    if "--json" in argv:
+        print(json.dumps(r, ensure_ascii=False))
+        return 2 if r["should"] else 0
+    if r["should"]:
+        print(r["text"])
+        return 2
+    return 0
+
+
+# ---------------------------------------------------------------- 命令：track
+#
+# 访问戳记只有一份实现（hooks/_state.py 的 touch_access，按天幂等、按 agent 分文件）。
+# DSH 那边把 `read`/`ops_read_files` 的路径丢进来，这边转成库内相对路径再戳。
+
+def cmd_track(root: Path, argv: list[str]) -> int:
+    """把读过的记忆文件戳成今天。`--paths` 用 os.pathsep 分隔（Windows 是 ;）。
+
+    不打印任何东西——它挂在 PostToolUse 上，输出会进上下文。
+    """
+    raw = flag(argv, "--paths") or ""
+    if not raw.strip():
+        return 0
+
+    agent = cli_agent(root, argv)
+    if not agent:
+        agent = session_agent(root, flag(argv, "--session") or "") or ""
+
+    rels = []
+    for chunk in raw.split(os.pathsep):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        rel = relative_to_root(root, chunk)
+        if rel:
+            rels.append(rel)
+
+    touch_access(root, rels, agent or None)
+    return 0
+
+
+# ---------------------------------------------------------------- 命令：skills
+#
+# DSH 读 `~/.dsh/skills/<name>/SKILL.md`（兼容平铺 `<name>.md`）。
+# 插件目录更新后那份副本会过期，所以「装/查/换」都收在这个命令里，
+# 而不是让用户手抄一份。Windows 无权限建符号链接时退回复制。
+
+def dsh_skills_dir() -> Path:
+    env = os.environ.get("DSH_HOME")
+    base = Path(env) if env else Path.home() / ".dsh"
+    return base / "skills"
+
+
+def _same_skill(dst: Path, src: Path) -> bool:
+    """两份 SKILL.md 内容是否一致。读不动就当不同（宁可多刷新一次）。"""
+    try:
+        return dst.read_bytes() == src.read_bytes()
+    except OSError:
+        return False
+
+
+def cmd_skills(root: Path, argv: list[str]) -> int:
+    """把插件自带的 skill 装进 `~/.dsh/skills/`。
+
+    用法：
+        skills            看现状（每个 skill 是已装 / 缺 / 过期）
+        skills --install  装或刷新（默认建符号链接，失败退回复制）
+        skills --mode copy|link --install  指定方式
+    """
+    src_dir = Path(__file__).resolve().parent.parent / "skills"
+    if not src_dir.is_dir():
+        print(f"找不到插件自带的 skills 目录：{src_dir}")
+        return 1
+
+    dst_root = dsh_skills_dir()
+    mode = flag(argv, "--mode") or "auto"
+    install = "--install" in argv
+
+    if install:
+        dst_root.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    for skill_md in sorted(src_dir.glob("*/SKILL.md")):
+        name = skill_md.parent.name
+        dst = dst_root / name
+        state = "missing"
+        if dst.is_symlink():
+            try:
+                state = "ok" if dst.resolve() == skill_md.parent.resolve() else "different"
+            except OSError:
+                state = "different"
+        elif dst.is_dir():
+            # 复制模式装的那种：没有链接可比，就比主文件内容。
+            # 有差异说明插件更新过、这份副本过期了。
+            state = "ok" if _same_skill(dst / "SKILL.md", skill_md) else "stale"
+        rows.append((name, state, dst, skill_md.parent))
+
+    if install:
+        for name, state, dst, src in rows:
+            if state == "ok":
+                continue
+            if dst.exists() or dst.is_symlink():
+                if dst.is_symlink() or dst.is_file():
+                    dst.unlink()
+                else:
+                    shutil.rmtree(dst)
+            used = "link"
+            if mode != "copy":
+                try:
+                    if sys.platform == "win32":
+                        os.symlink(src, dst, target_is_directory=True)
+                    else:
+                        dst.symlink_to(src, target_is_directory=True)
+                except OSError as exc:
+                    if mode == "link":
+                        print(f"{name}：建链接失败（{exc}）")
+                        continue
+                    log(f"建链接失败，改为复制：{exc}")
+                    used = "copy"
+            if used == "copy" or mode == "copy":
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            print(f"已装 {name}（{'符号链接' if used == 'link' else '复制'}）")
+
+    print(f"\n目标目录：{dst_root}")
+    w = max(len(n) for n, *_ in rows) if rows else 10
+    marks = {"ok": "已装", "missing": "缺", "different": "已存在但不是同一份", "stale": "副本过期"}
+    for name, state, dst, src in rows:
+        if install and state != "ok":
+            state = "ok" if (dst.exists() or dst.is_symlink()) else "missing"
+        print(f"  {name:<{w}}  {marks[state]:<14} {dst}")
+    if any(s != "ok" for _, s, _, _ in rows) and not install:
+        print("\n装法：python core/memory.py skills --install")
+    return 0
+
+
 # ---------------------------------------------------------------- 命令：index
 
 def build_workspaces_table(root: Path) -> str:
@@ -2275,6 +2628,12 @@ def main(argv: list[str]) -> int:
     if cmd == "timeline":
         d = flag(argv, "--days")
         return cmd_timeline(root, int(d) if d and d.isdigit() else 30)
+    if cmd == "digest":
+        return cmd_digest(root, argv)
+    if cmd == "track":
+        return cmd_track(root, argv)
+    if cmd == "skills":
+        return cmd_skills(root, argv)
     if cmd == "init":
         if "--agent" in argv:
             agent = flag(argv, "--agent")

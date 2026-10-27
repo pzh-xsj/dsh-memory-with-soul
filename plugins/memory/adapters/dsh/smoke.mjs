@@ -158,6 +158,51 @@ if (python === null) {
   }
 }
 
+// ---------------------------------------------------------------- 静态检查
+//
+// 不启动 DSH，只读源码：这些是「改了 index.js 就会悄悄失效」的地方，
+// 靠肉眼检查不靠谱。
+
+const INDEX_JS = join(HERE, 'index.js')
+const PACKAGE_JSON = join(HERE, 'package.json')
+
+check('清单 / name 与 patch 一致', () => {
+  const pkg = JSON.parse(readFileSync(PACKAGE_JSON, 'utf8'))
+  const patch = readFileSync(join(HERE, 'cordis.patch.yml'), 'utf8')
+  const used = /name:\s*'([^']+)'/.exec(patch)?.[1] ?? ''
+  must(used !== '', 'patch 里没找到 name')
+  must(used === pkg.name, `patch 用 ${used}，清单是 ${pkg.name}`)
+  return pkg.name
+})
+
+check('清单 / 必填字段', () => {
+  const pkg = JSON.parse(readFileSync(PACKAGE_JSON, 'utf8'))
+  for (const key of ['name', 'version', 'engines', 'dsh']) must(key in pkg, `缺少 ${key}`)
+  must(pkg.engines.node !== undefined, '缺 engines.node')
+  must(pkg.dsh?.engines?.dsh !== undefined, '缺 dsh.engines.dsh')
+  must(pkg.dsh?.bundle?.patch === './cordis.patch.yml', 'dsh.bundle.patch 应指向 cordis.patch.yml')
+  return `${pkg.name}@${pkg.version}`
+})
+
+check('入口 / 导出 apply、注入 subprocess', () => {
+  const src = readFileSync(INDEX_JS, 'utf8')
+  must(/export\s+const\s+inject\s*=/.test(src), '缺 `export const inject`')
+  must(/export\s+function\s+apply\s*\(/.test(src), '缺 `export function apply`')
+  must(/inject\s*=\s*\['subprocess'\]/.test(src), 'inject 里没有 subprocess')
+  must(/ctx\.on\(\s*'session\/event'/.test(src), '没挂 session/event（track 与 digest 都靠它）')
+  must(src.includes("'track'"), '没调用 core 的 track 子命令')
+  must(src.includes("'digest'"), '没调用 core 的 digest 子命令')
+  return 'ok'
+})
+
+check('渲染器 / --dry 不写状态', () => {
+  const src = readFileSync(RENDERER, 'utf8')
+  const main = src.slice(src.lastIndexOf('def main('))
+  must(main.includes('"--dry" in argv'), 'main 里没解析 --dry')
+  must(/if not dry:/.test(main), 'main 没有 dry 分支（dry 时仍会写状态）')
+  return 'ok'
+})
+
 // ---------------------------------------------------------------- 报表
 
 let failed = 0
