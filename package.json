@@ -19,6 +19,7 @@
     "README.md"
   ],
   "license": "MIT",
+  "author": "pzh-xsj",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -30,11 +31,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/YOUR-GITHUB-USER/dsh-memory-with-soul.git"
+    "url": "https://github.com/pzh-xsj/dsh-memory-with-soul.git"
   },
-  "homepage": "https://github.com/YOUR-GITHUB-USER/dsh-memory-with-soul#readme",
+  "homepage": "https://github.com/pzh-xsj/dsh-memory-with-soul#readme",
   "bugs": {
-    "url": "https://github.com/YOUR-GITHUB-USER/dsh-memory-with-soul/issues"
+    "url": "https://github.com/pzh-xsj/dsh-memory-with-soul/issues"
   },
   "engines": {
     "node": ">=22"
