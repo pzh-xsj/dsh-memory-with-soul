@@ -781,7 +781,9 @@ def self_test(root: Path) -> int:
         backups_before = set(bdir.glob("*.bak")) if bdir.is_dir() else set()
         # 人格自 0.6.3 起写在角色卡上：临时造一张卡 + 一条临时映射，测完还原 config
         cfg_p = root / "config.json"
-        cfg_orig = cfg_p.read_text(encoding="utf-8") if cfg_p.is_file() else None
+        # 按字节存还原：read_text 会把 CRLF 折成 LF，写回去就成了「内容没变、
+        # git 说文件改了」——自检不该让别人仓库多出一条假修改
+        cfg_orig = cfg_p.read_bytes() if cfg_p.is_file() else None
         tmp_agent = root / "agents" / "zz-selftest"
         tmp_role = root / "roles" / "zz-selftest"
         tmp_md = root / "shared" / "zz-selftest.md"
@@ -821,27 +823,34 @@ def self_test(root: Path) -> int:
                 "agent": "zz-selftest", "file": "IDENTITY.md", "text": "x"})
             check("POST /api/persona 拒收 IDENTITY.md", code == 400, f"{code}")
 
-            # roles --new / --map / --default：建卡不覆盖、映射落 config、defaultRole 兜底
-            new_card = root / "roles" / "zz-new" / "SOUL.md"
-            rc = mem.roles_new(root, ["--new", "zz-new", "--blank"])
-            check("roles --new 建卡（--blank）",
-                  rc == 0 and new_card.is_file() and "name: zz-new" in new_card.read_text(encoding="utf-8"),
-                  f"rc={rc}")
-            new_card.write_text("MARK\n", encoding="utf-8")
-            rc = mem.roles_new(root, ["--new", "zz-new", "--blank"])
-            check("roles --new 不覆盖已有卡",
-                  rc == 1 and new_card.read_text(encoding="utf-8") == "MARK\n", f"rc={rc}")
-            rc = mem.roles_map_agent(root, ["--map", "zz-selftest", "zz-new"])
-            cfg_after = json.loads(cfg_p.read_text(encoding="utf-8"))
-            check("roles --map 写 config.roles",
-                  rc == 0 and (cfg_after.get("roles") or {}).get("zz-selftest") == "zz-new",
-                  f"rc={rc} {(cfg_after.get('roles') or {}).get('zz-selftest')}")
-            rc = mem.roles_set_default(root, ["--default", "zz-new"])
-            cfg_after = json.loads(cfg_p.read_text(encoding="utf-8"))
-            role_fb, _src = mem.resolve_role(root, "zz-unmapped", cfg_after)
-            check("defaultRole 兜底：未映射的 agent 也解析出角色",
-                  rc == 0 and cfg_after.get("defaultRole") == "zz-new" and role_fb == "zz-new",
-                  f"rc={rc} role={role_fb}")
+            # roles --new / --map / --default：在临时库里验，不碰真库
+            # （上一版直接在真库上跑：--default 会改真 config，卡在 finally 兜着，
+            #  一旦中途崩就留下半截状态——自检不该有这种副作用）
+            import tempfile
+            roles_root = Path(tempfile.mkdtemp(prefix="zz-roles-"))
+            try:
+                new_card = roles_root / "roles" / "zz-new" / "SOUL.md"
+                rc = mem.roles_new(roles_root, ["--new", "zz-new", "--blank"])
+                check("roles --new 建卡（--blank）",
+                      rc == 0 and new_card.is_file() and "name: zz-new" in new_card.read_text(encoding="utf-8"),
+                      f"rc={rc}")
+                new_card.write_text("MARK\n", encoding="utf-8")
+                rc = mem.roles_new(roles_root, ["--new", "zz-new", "--blank"])
+                check("roles --new 不覆盖已有卡",
+                      rc == 1 and new_card.read_text(encoding="utf-8") == "MARK\n", f"rc={rc}")
+                rc = mem.roles_map_agent(roles_root, ["--map", "zz-selftest", "zz-new"])
+                cfg_t = json.loads((roles_root / "config.json").read_text(encoding="utf-8"))
+                check("roles --map 写 config.roles",
+                      rc == 0 and (cfg_t.get("roles") or {}).get("zz-selftest") == "zz-new",
+                      f"rc={rc} {(cfg_t.get('roles') or {}).get('zz-selftest')}")
+                rc = mem.roles_set_default(roles_root, ["--default", "zz-new"])
+                cfg_t = json.loads((roles_root / "config.json").read_text(encoding="utf-8"))
+                role_fb, _src = mem.resolve_role(roles_root, "zz-unmapped", cfg_t)
+                check("defaultRole 兜底：未映射的 agent 也解析出角色",
+                      rc == 0 and cfg_t.get("defaultRole") == "zz-new" and role_fb == "zz-new",
+                      f"rc={rc} role={role_fb}")
+            finally:
+                shutil.rmtree(roles_root, ignore_errors=True)
 
             tmp_md.write_text("# 自检\n", encoding="utf-8")
             code, data = _post(f"{base}/api/file", {
@@ -857,9 +866,8 @@ def self_test(root: Path) -> int:
         finally:
             shutil.rmtree(tmp_agent, ignore_errors=True)
             shutil.rmtree(tmp_role, ignore_errors=True)
-            shutil.rmtree(root / "roles" / "zz-new", ignore_errors=True)
             if cfg_orig is not None:
-                cfg_p.write_text(cfg_orig, encoding="utf-8")
+                cfg_p.write_bytes(cfg_orig)
             else:
                 cfg_p.unlink(missing_ok=True)
             tmp_md.unlink(missing_ok=True)
