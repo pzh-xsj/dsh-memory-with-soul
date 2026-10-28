@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-memory-inject",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "private": true,
   "description": "DSH 记忆系统：会话开始时注入记忆库，工具读文件时记访问时间，回合结束时提醒提炼。",
   "type": "module",

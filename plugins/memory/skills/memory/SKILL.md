@@ -21,13 +21,16 @@ CLI 在 `<插件根>/core/memory.py`，十一个入口：
 | `timeline [--days N]` | 跨项目册日志时间线，默认 30 天 |
 | `init` | 建空库 |
 | `init --agent <id> [--role <role>] [--from <id>]` | 建 agent 目录 + 角色卡，并写 `config.roles` |
+| `roles --new <role> [--from <role> \| --blank] [--dry]` | 单独建角色卡，不写映射（下一步 `--map`） |
+| `roles --map <agent> <role>` / `--unmap <agent>` | 改 `config.roles` |
+| `roles --default <role\|none>` | 改 `config.defaultRole`（没映射的 agent 的兜底人格） |
 | `init --project <路径> [--id <id>] [--title <标题>] [--kind <领域>]` | 建项目册 + git + 登记 + 同步索引。**`--kind` 没有默认值**：不传就永远不注入 playbook，checkup 会报缺 |
 
 > **2026-10-26 结构变了**：`shared/domains/` 已拆掉。可枚举的东西是三类——**项目册**（`<workspace>/.memory/`）、**playbooks**（`shared/playbooks/<领域>/<类型>.md`）、**topics**（`shared/topics/<主题>.md`）。`index --write` 维护这三张表。
 
 ## 我是谁（agent 身份）
 
-`agent_id` 现在还是 `moxie-dsh` 这种 **persona + harness**（历史遗留：WorkBuddy 已退场，只有 DSH 在写）。**人格不挂在 agent 上**——它读 `roles/<role>/SOUL.md`，agent 只是指向卡的指针。
+`agent_id` 现在是**人格名本身**（0.6.6 起不再拼 `-harness`；旧库里的 `moxie-dsh` / `moxie-wb` 由 `docs/tools/migrate_agent_id.py` 合成 `moxie`）。**人格不挂在 agent 上**——它读 `roles/<role>/SOUL.md`，agent 只是指向卡的指针：`config.roles` 定映射，`defaultRole` 兜没映射的 agent。
 
 注入内容第一行 `# 长期记忆（agent: xxx，harness: yyy，库：...）` 就是当前身份，**不要猜**。
 
@@ -35,7 +38,7 @@ CLI 在 `<插件根>/core/memory.py`，十一个入口：
 
 1. `MEMORY_AGENT` 环境变量 → 整体覆盖
 2. `payload.agent_type` → 专家 / 具名会话自带（普通会话没有这个字段）
-3. `config.json` 的 `defaultAgent`（persona）+ harness
+3. `config.json` 的 `defaultAgent`（人格名）与 `config.roles`
 4. 洗不出来 → `default`
 
 **专家识别是半自动的**：专家会话大概率带 `agent_type`，会自动分到 `content-creator-wb` 这类目录；普通会话没有该字段，退回 `defaultAgent`；中文专家名会变成 `agent-<哈希>-wb`。拿不准就看注入首行的 `agent:`。

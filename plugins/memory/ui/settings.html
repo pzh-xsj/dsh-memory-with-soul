@@ -176,6 +176,7 @@
         <button class="chip" data-f="shared">shared</button>
         <button class="chip" data-f="agents">agents</button>
         <button class="chip" data-f="log">log</button>
+        <button class="chip" data-f="roles">roles</button>
       </div>
     </div>
   </div>
@@ -1251,12 +1252,15 @@ function renderRoleLine() {
   const list = (S.overview && S.overview.roles) || [];
   const info = list.find((r) => r.role === role) || null;
   const el = $("#roleInfo");
+  el.onclick = null;
+  el.style.cursor = "";
+  el.title = "";
   if (!S.agent) {
     el.textContent = "先选 agent";
     return;
   }
   if (!S.server) {
-    el.textContent = "本地目录模式：角色映射读不到，按旧路径 agents/<id>/SOUL.md 显示";
+    el.textContent = "本地目录模式：读不到 config.roles，角色行不可用（连服务端才有映射）";
     el.style.color = "var(--muted)";
     $("#soulSub").textContent = "人格 · 本地目录模式";
     return;
@@ -1270,7 +1274,23 @@ function renderRoleLine() {
   const card = info && info.has_soul ? `roles/${role}/SOUL.md` : `roles/${role}/SOUL.md（缺文件）`;
   el.textContent = `${role} → ${card}${info && info.name ? " · name: " + info.name : ""}`;
   el.style.color = info && info.has_soul ? "var(--fg)" : "var(--warn)";
+  if (info && info.has_soul) {
+    el.style.cursor = "pointer";
+    el.title = "点开这张卡";
+    el.onclick = () => jumpToRoleCard(role);
+  }
   $("#soulSub").textContent = `角色卡 ${role} · 我是谁，以及怎么说话`;
+}
+
+// 角色行 → 记忆页选中这张卡。先切页签再设筛选：切页签可能触发首次加载，
+// 那会重置 S.filter，反过来设就被吃掉了。
+async function jumpToRoleCard(role) {
+  if (!role) return;
+  await showTab("memory");
+  S.filter = "roles";
+  $$("#memChips .chip").forEach((c) => c.classList.toggle("active", c.dataset.f === "roles"));
+  renderTree();
+  await openMemoryFile(`roles/${role}/SOUL.md`);
 }
 
 async function loadSoul() {
@@ -1278,15 +1298,14 @@ async function loadSoul() {
   if (S.server && !S.overview) await loadOverview();
   renderRoleLine();
   const role = roleOfAgent(S.agent);
-  let path = role ? `roles/${role}/SOUL.md` : "";
-  // 本地目录模式看不到 config.json 里的映射，退回旧路径；服务端模式不退回，
-  // 否则「没配角色」会被悄悄读成人格还在
-  if (!path && !S.server && S.agent) path = `agents/${S.agent}/SOUL.md`;
+  const path = role ? `roles/${role}/SOUL.md` : "";
+  // 服务端模式没有旧路径可退：0.6.6 起渲染器不再回退读 agents/<id>/SOUL.md，
+  // 这里再退一次只会让「没配角色」看起来像「人格还在」
   if (!path) {
     S.soul = null;
     box.replaceChildren(h("p", {
       class: "empty",
-      text: `${S.agent || "这个 agent"} 还没配角色卡：跑 memory.py roles --migrate，或在 config.json 的 roles 里给它指定一张卡`,
+      text: `${S.agent || "这个 agent"} 还没配角色卡：跑 memory.py roles --map ${S.agent || "<agent>"} <role>，或 roles --migrate 搬旧人格`,
     }));
     refreshButtons();
     return;

@@ -56,9 +56,12 @@ def find_project_book(start: Path | str | None = None) -> Path | None:
 
 # ---------------------------------------------------------------- 身份
 #
-# agent_id = <persona>-<harness>，例如 moxie-wb / moxie-dsh。
-# 为什么带 harness（历史决定，0.6.5 后待改，见 FRAMEWORK §2.2.1）：两个 harness 共用同一个 ~/.memory，如果都叫 moxie，
-# 两边的人格、日志、冷却会互相踩。一个 agent 一间房。
+# agent_id = <persona>。0.6.6 起不带 harness 后缀（FRAMEWORK §2.2.1 已实施）：
+# 目标宿主只有 DSH，一个人格一个标识，不因跑在哪而分房间。
+#
+# 历史：0.6.5 及之前是 `<persona>-<harness>`（moxie-wb / moxie-dsh）。当初带后缀
+# 是为了让 WB 和 DSH 共用同一个 ~/.memory 时不互相踩；代价是同一份人格要养两份
+# SOUL.md（已经漂移过）、日志按 harness 裂成两处。WB 退场后这个理由消失了。
 
 AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SESSION_RE = re.compile(r"[^A-Za-z0-9._-]")
@@ -128,7 +131,7 @@ def load_config(root: Path) -> dict:
 
 
 def resolve_agent(root: Path, payload: dict | None = None) -> tuple[str, str]:
-    """解析当前 agent 的完整 id，返回 (agent_id, 来源)。
+    """解析当前 agent 的 id，返回 (agent_id, 来源)。
 
     优先级：
       1. MEMORY_AGENT            整体覆盖（逃生口），必须过白名单——否则 `../` 能写穿 .state
@@ -138,14 +141,15 @@ def resolve_agent(root: Path, payload: dict | None = None) -> tuple[str, str]:
 
     第 2 条是「同一 harness 换专家」的唯一自动识别路径。harness 源码里
     buildAgentTrigger 会把它塞进 payload；普通会话没有这个字段，所以观察不到。
+
+    0.6.6 起**不再拼 `-<harness>`**：agent_id 就是这个人格名。两个 harness
+    各占一间房的理由随 WB 退场一起消失（见文件头注释）。
     """
     raw = os.environ.get("MEMORY_AGENT", "").strip().lower()
     if raw:
         if AGENT_RE.match(raw):
             return raw, "env.MEMORY_AGENT"
         log(f"MEMORY_AGENT 不合法（{raw}），已忽略")
-
-    harness, _ = detect_harness(payload)
 
     persona = normalize_persona((payload or {}).get("agent_type"))
     source = "payload.agent_type"
@@ -156,9 +160,7 @@ def resolve_agent(root: Path, payload: dict | None = None) -> tuple[str, str]:
         persona = "default"
         source = "fallback"
 
-    if persona.endswith(f"-{harness}"):
-        return persona, f"{source}（已含 harness）"
-    return f"{persona}-{harness}", f"{source}+harness"
+    return persona, source
 
 
 def state_name(agent: str, name: str) -> str:
@@ -362,16 +364,31 @@ def extraction_state(text: str) -> tuple[str, int]:
     return "done", n
 
 
+# 日志文件名永远以日期开头：`2026-10-27.md`，多来源加一段来源后缀
+# （`2026-10-27.wb.md`）。日期只认首段——用 stem 当日期会把同一天算成两天。
+LOG_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:\.[a-z0-9-]+)?\.md$")
+
+
+def log_day(name: str) -> str:
+    """日志文件名 → 日期。`2026-10-27.md` 与 `2026-10-27.wb.md` 都给 10-27。"""
+    m = LOG_NAME_RE.match(name)
+    return m.group(1) if m else ""
+
+
 def recent_logs(log_dir: Path, days: int = 3) -> list[Path]:
-    """最近 days 天（含今天）存在的日志，按日期倒序。"""
+    """最近 days 天（含今天）存在的日志，按日期倒序；同一天的多份按名字排（主文件在前）。
+
+    按日期前缀列目录，而不是拼 `{日期}.md`：拼精确文件名会让带来源后缀的日志
+    对注入和提炼提醒**静默隐形**——不报错，就是不出现。
+    """
     if not log_dir.is_dir():
         return []
+    names = sorted(p.name for p in log_dir.glob("*.md"))
     today = date.today()
     out = []
     for i in range(days):
-        p = log_dir / f"{(today - timedelta(days=i)).isoformat()}.md"
-        if p.is_file():
-            out.append(p)
+        day = (today - timedelta(days=i)).isoformat()
+        out.extend(log_dir / n for n in names if log_day(n) == day)
     return out
 
 
@@ -398,7 +415,7 @@ def unextracted(log_dir: Path, days: int = 3) -> list[tuple[str, int, str]]:
         if n == 0:
             continue
         if state in {"missing", "none_bare"}:
-            out.append((p.stem, n, state))
+            out.append((log_day(p.name) or p.stem, n, state))
     return out
 
 

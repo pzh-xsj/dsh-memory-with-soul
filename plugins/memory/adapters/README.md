@@ -33,7 +33,7 @@ per-agent 的东西注册在 `agent/created` 拿到的 `agent.ctx` 上。
 
 | harness | 注入点 | 身份来源 |
 | --- | --- | --- |
-| dsh (DeepSeek Harness) | bundle 监听 `agent/created` → `agent.inject(createUserMessage)` | `MEMORY_HARNESS=dsh` → `<defaultAgent>-dsh` |
+| dsh (DeepSeek Harness) | bundle 监听 `agent/created` → `agent.inject(createUserMessage)` | `MEMORY_AGENT` > `defaultAgent`（0.6.6 起 agent_id 不再拼 `-dsh`） |
 
 **0.6.5 起只剩 DSH 一个宿主。** WorkBuddy 的钩子（`hooks/hooks.json`、`post-read.py`、`stop.py`）与它的两层清单已删——WB 从 10-27 起冻结，目标是卸掉，不再维护第二个适配器。注入表仍然只有 `config.json` 一处定义，接第三个 harness 只需写 `adapters/<name>/`。
 

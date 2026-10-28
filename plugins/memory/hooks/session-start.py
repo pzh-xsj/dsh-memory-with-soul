@@ -10,8 +10,8 @@ DSH 适配器以子进程跑本脚本、把 stdout 包成一条 user 消息注�
 3. 项目册入口 + 项目册最近日志（按 cwd 向上找）
 4. 总册内容（config.json 的 inject.order）
 
-身份：agent_id = <persona>-<harness>，例如 moxie-wb / moxie-dsh。
-harness 靠 MEMORY_HARNESS → transcript_path → 插件路径判定。
+身份：agent_id 就是人格名（0.6.6 起不带 harness），例如 moxie。
+harness 靠 MEMORY_HARNESS → transcript_path → 插件路径判定，只进日志与头部，不拼进 agent_id。
 payload 里没有 agent 字段，同一 harness 换专家认不出来，只能靠 MEMORY_AGENT 手工覆盖。
 
 用法：
@@ -45,6 +45,7 @@ from _state import (
     find_project_book,
     find_root,
     log,
+    log_day,
     prune_sessions,
     read_text,
     recent_logs,
@@ -177,7 +178,8 @@ def load_project_log(project: Path, agent: str, n: int) -> str:
     body = tail_lines(strip_frontmatter(read_text(latest)), n)
     if not body.strip():
         return ""
-    return f"\n### 最近日志（{agent}，{latest.stem}）\n\n{body}\n"
+    day = log_day(latest.name) or latest.stem
+    return f"\n### 最近日志（{agent}，{day}）\n\n{body}\n"
 
 
 def build_warning(project: Path | None, root: Path, agent: str) -> str:
@@ -231,23 +233,11 @@ def load(
             # 配置里写了渲染器不认识的占位符。跳过，别拼出奇怪路径
             continue
         full = root / path
-        # 迁移期兼容读：角色卡还没建时回退到旧位置 agents/<id>/SOUL.md。
-        # 只保留一个版本——两处都能读会长期掩盖「迁移没做」。
-        legacy_read = False
-        if not full.is_file() and role and path == f"roles/{role}/SOUL.md":
-            legacy = root / "agents" / agent / "SOUL.md"
-            if legacy.is_file():
-                full = legacy
-                legacy_read = True
         if not full.is_file():
             # 必需文件缺失必须说出来。原来直接 continue，结果是静默注入空人格
             if entry.get("required"):
                 missing.append(path)
             continue
-        if legacy_read:
-            warnings.append(
-                f"人格读的是旧位置 agents/{agent}/SOUL.md；跑 `memory.py roles --migrate` 收口"
-            )
         text = read_text(full)
         if not text.strip():
             if entry.get("required"):
@@ -472,12 +462,12 @@ def main(argv: list[str]) -> int:
             "子 agent 没有单独配角色（roles.subagent），" + (f"沿用角色 {role}" if role else "defaultRole 也没配，这次没有可注入的人格")
         )
 
-    if not role and not (root / "agents" / agent / "SOUL.md").is_file():
+    if not role:
         warnings.append(
-            f"没有可注入的人格：没配角色卡，也没有 agents/{agent}/SOUL.md"
-            "（跑 `memory.py roles --migrate` 或手写 roles/<role>/SOUL.md）"
+            "没有可注入的人格：这个 agent 没配角色卡，defaultRole 也是空的"
+            "（跑 `memory.py roles --migrate` 或 `roles --map <agent> <role>`）"
         )
-    if role and not role_card(root, role).is_file() and not (root / "agents" / agent / "SOUL.md").is_file():
+    elif not role_card(root, role).is_file():
         warnings.append(f"角色卡不存在：roles/{role}/SOUL.md（这次人格是空的）")
 
     if forced:

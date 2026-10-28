@@ -24,6 +24,11 @@
     python memory.py roles               列角色卡（roles/<role>/SOUL.md）与每个 agent 读哪张
     python memory.py roles --migrate [--dry] [--default-role <role>]
                                          把 agents/<id>/SOUL.md 搬成角色卡并改写 config
+    python memory.py roles --new <role> [--from <role> | --blank] [--dry]
+                                         新建一张角色卡（不写映射，下一步 --map）
+    python memory.py roles --map <agent> <role>      让某个 agent 读这张卡
+    python memory.py roles --unmap <agent>           删掉映射，改落 defaultRole
+    python memory.py roles --default <role|none>     没配映射的 agent 用哪张卡
     python memory.py init [路径]         初始化新库
     python memory.py init --agent <id> [--role <role>] [--from <id>]
                                          建 agent 目录 + 一张角色卡，并写 config.roles
@@ -37,9 +42,7 @@
 
 from __future__ import annotations
 
-import contextlib
 import importlib.util
-import io
 import json
 import os
 import re
@@ -71,6 +74,7 @@ try:
         list_roles,
         load_config,
         log,
+        log_day,
         log_dir_for,
         read_state,
         read_text,
@@ -93,6 +97,7 @@ except Exception:  # 单独拷走 core/ 时仍能跑，只是少了提炼检查�
     list_roles = None
     load_config = None
     log = None
+    log_day = None
     log_dir_for = None
     read_state = None
     read_text = None
@@ -178,10 +183,9 @@ CONFIG_DEFAULTS = {
 # 体检问题里「怎么改是确定的」那一小撮。fix 存的是数据（kind + 参数），
 # 不是命令字符串：设置页只能点这四个 kind，改不了文件路径，也拼不出任意命令。
 # 其余问题（内容判断、JSON 坏了、schema 不符）一律不给 fix——机器不该替人做决定。
-FIX_KINDS = ("index_sync", "merge_identity", "config_sync_off", "config_drop_unknown")
+FIX_KINDS = ("index_sync", "config_sync_off", "config_drop_unknown")
 FIX_LABELS = {
     "index_sync": "同步总索引三张表",
-    "merge_identity": "把 IDENTITY.md 并进 SOUL.md",
     "config_sync_off": "把 sync.enabled 改回 false",
     "config_drop_unknown": "删掉 config 里代码不认识的键",
 }
@@ -198,7 +202,7 @@ def find_root() -> Path:
 
 
 def default_agent(root: Path) -> str:
-    """当前 agent 的完整 id（<persona>-<harness>）。
+    """当前 agent 的 id（0.6.6 起就是人格名，不带 harness 后缀）。
 
     优先走 hooks/_state 的解析，保证 CLI 和 hook 口径一致；
     没有 _state 时退回读 config 的 defaultAgent。
@@ -407,18 +411,26 @@ def migrate_roles(root: Path, dry: bool = False, fallback_role: str = "") -> int
 
 
 def cmd_roles(root: Path, argv: list[str]) -> int:
-    """roles：列角色卡；--migrate 把旧人格搬成卡。"""
+    """roles：列角色卡；--migrate 搬旧人格；--new/--map/--unmap/--default 改卡与映射。"""
     if "--migrate" in argv:
         return migrate_roles(root, "--dry" in argv, flag(argv, "--default-role") or "")
+    if "--new" in argv:
+        return roles_new(root, argv)
+    if "--map" in argv:
+        return roles_map_agent(root, argv)
+    if "--unmap" in argv:
+        return roles_unmap_agent(root, argv)
+    if "--default" in argv:
+        return roles_set_default(root, argv)
 
     cfg = _config(root)
-    mapping = role_map(root, cfg)
     fallback = default_role(root, cfg)
     cards = list_roles(root, cfg)
     print(f"角色卡目录：{root / ROLE_DIR}")
     print(f"defaultRole：{fallback or '（没配）'}")
     if not cards:
         print("\n还没有角色卡。迁移旧人格：python core/memory.py roles --migrate --dry")
+        print("或直接新建：python core/memory.py roles --new <role> --blank")
     else:
         print()
         for c in cards:
@@ -435,6 +447,156 @@ def cmd_roles(root: Path, argv: list[str]) -> int:
         card = f"roles/{role}/SOUL.md" if role else "（没有角色卡）"
         extra = "（旧人格还在）" if legacy else ""
         print(f"  {pad(agent, 16)}{pad(card, 32)}{source}{extra}")
+
+    print("\n改：--map <agent> <role> · --unmap <agent> · --default <role|none>")
+    print("建卡：--new <role> --from <role>（照抄）或 --blank（空骨架）")
+    return 0
+
+
+def _roles_positionals(argv: list[str], name: str) -> list[str]:
+    """取 `--x` 之后的非旗标参数。跟 `workspaces --fix` 同一个套路。"""
+    i = argv.index(name)
+    return [a for a in argv[i + 1:] if not a.startswith("--")]
+
+
+def roles_new(root: Path, argv: list[str]) -> int:
+    """`roles --new <role> [--from <role> | --blank]`：新建一张卡，不写映射。
+
+    建卡与映射分开是故意的：先有卡再指过去，中间态是「一张没人用的卡」，
+    checkup 会说一句；反过来先有映射后补卡，是静默注入空人格。
+    """
+    rest = _roles_positionals(argv, "--new")
+    if not rest:
+        print("用法：memory.py roles --new <role> [--from <role> | --blank] [--dry]")
+        print("  --from <role>  照抄一张已有的卡（会加一行「从哪复制」）")
+        print("  --blank        写最小骨架（name + identity + 四节空标题）")
+        return 1
+
+    role = rest[0].strip().lower()
+    if not ROLE_RE.match(role):
+        print(f"角色名不合法：{role}（只允许小写字母、数字、连字符，1-32 位）")
+        return 1
+
+    card = role_card(root, role)
+    if card.is_file():
+        print(f"角色卡已存在，不覆盖：roles/{role}/SOUL.md")
+        print("要改内容：直接编辑它，或去设置页「人格」按节改。")
+        return 1
+
+    src = (flag(argv, "--from") or "").strip().lower()
+    blank = "--blank" in argv
+    if bool(src) == blank:
+        print("必须二选一：--from <role>（照抄已有的卡）或 --blank（写空骨架）")
+        return 1
+
+    today = date.today().isoformat()
+    if src:
+        if not ROLE_RE.match(src):
+            print(f"源角色名不合法：{src}")
+            return 1
+        src_card = role_card(root, src)
+        if not src_card.is_file():
+            print(f"源角色卡不存在：roles/{src}/SOUL.md")
+            return 1
+        rel = src_card.relative_to(root).as_posix()
+        text = read(src_card).rstrip("\n") + "\n\n---\n\n_从 `" + rel + "` 复制于 " + today + "。"
+        text += "之后两边独立演化，不自动同步。_\n"
+    else:
+        text = AGENT_TEMPLATES["SOUL.md"].format(today=today, agent=role)
+
+    if "--dry" in argv:
+        print(f"[dry] 将新建 roles/{role}/SOUL.md（{len(text)} 字符，来源 {src or '空骨架'}）")
+        return 0
+
+    card.parent.mkdir(parents=True, exist_ok=True)
+    card.write_text(text, encoding="utf-8", newline="\n")
+    print(f"已新建角色卡：roles/{role}/SOUL.md")
+    print(f"下一步把它指给某个 agent：memory.py roles --map <agent> {role}")
+    return 0
+
+
+def roles_map_agent(root: Path, argv: list[str]) -> int:
+    """`roles --map <agent> <role>`：让某个 agent 读这张卡（写 config.roles）。"""
+    rest = _roles_positionals(argv, "--map")
+    if len(rest) < 2:
+        print("用法：memory.py roles --map <agent> <role>")
+        return 1
+
+    agent, role = rest[0].strip().lower(), rest[1].strip().lower()
+    if not re.match(r"^[a-z0-9][a-z0-9-]*$", agent):
+        print(f"agent id 不合法：{agent}（只允许小写字母、数字、连字符）")
+        return 1
+    if not ROLE_RE.match(role):
+        print(f"角色名不合法：{role}（只允许小写字母、数字、连字符，1-32 位）")
+        return 1
+    if not role_card(root, role).is_file():
+        print(f"注意：roles/{role}/SOUL.md 还不存在。映射先写，卡补上之前这个 agent 注入空人格。")
+
+    cfg = _config(root)
+    roles_map = cfg.get("roles") if isinstance(cfg.get("roles"), dict) else {}
+    before = roles_map.get(agent) or "（没配）"
+    if before == role:
+        print(f"已经是 {agent} → {role}，没改。")
+        return 0
+
+    roles_map = dict(roles_map)
+    roles_map[agent] = role
+    cfg["roles"] = roles_map
+    _write_config(root, cfg)
+    print(f"config.roles：{agent} {before} → {role}")
+    return 0
+
+
+def roles_unmap_agent(root: Path, argv: list[str]) -> int:
+    """`roles --unmap <agent>`：删掉某个 agent 的映射，之后落 defaultRole。"""
+    rest = _roles_positionals(argv, "--unmap")
+    if not rest:
+        print("用法：memory.py roles --unmap <agent>")
+        return 1
+
+    agent = rest[0].strip().lower()
+    cfg = _config(root)
+    roles_map = cfg.get("roles") if isinstance(cfg.get("roles"), dict) else {}
+    if agent not in roles_map:
+        print(f"{agent} 本来就不在 config.roles 里，没改。")
+        return 0
+
+    old = roles_map[agent]
+    roles_map = dict(roles_map)
+    del roles_map[agent]
+    cfg["roles"] = roles_map
+    _write_config(root, cfg)
+    fallback = default_role(root, cfg)
+    tail = f"现在落 defaultRole={fallback}" if fallback else "现在没有角色可注入"
+    print(f"config.roles：删掉 {agent}（原来读 roles/{old}/SOUL.md）；{tail}")
+    return 0
+
+
+def roles_set_default(root: Path, argv: list[str]) -> int:
+    """`roles --default <role>`：没配映射的 agent 落哪张卡。`none` 或空串清空。"""
+    rest = _roles_positionals(argv, "--default")
+    if not rest:
+        print("用法：memory.py roles --default <role>    （none 或空串 = 清空）")
+        return 1
+
+    role = rest[0].strip().lower()
+    cfg = _config(root)
+    before = default_role(root, cfg) or "（空）"
+
+    if not role or role == "none":
+        cfg["defaultRole"] = ""
+        _write_config(root, cfg)
+        print(f"defaultRole：{before} → （空）")
+        return 0
+    if not ROLE_RE.match(role):
+        print(f"角色名不合法：{role}（只允许小写字母、数字、连字符，1-32 位）")
+        return 1
+    if not role_card(root, role).is_file():
+        print(f"注意：roles/{role}/SOUL.md 不存在。没配映射的 agent 会注入空人格。")
+
+    cfg["defaultRole"] = role
+    _write_config(root, cfg)
+    print(f"defaultRole：{before} → {role}")
     return 0
 
 
@@ -1253,14 +1415,18 @@ def project_files(book: Path) -> list[str]:
 
 
 def project_logs(book: Path) -> list[tuple[str, str, Path]]:
-    """项目册里的日志，返回 [(日期, agent, 路径)]，按日期倒序。"""
+    """项目册里的日志，返回 [(日期, agent, 路径)]，按日期倒序。
+
+    日期取文件名首段：`2026-10-27.md` 与 `2026-10-27.wb.md` 都算 10-27——
+    同一个日期裂成两天，`days_since` 和「有几天日志」都会算错。
+    """
     base = book / "log"
     if not base.is_dir():
         return []
     out = []
     for agent_dir in sorted(p for p in base.iterdir() if p.is_dir()):
         for f in agent_dir.glob("*.md"):
-            out.append((f.stem, agent_dir.name, f))
+            out.append((log_day(f.name) or f.stem, agent_dir.name, f))
     out.sort(key=lambda x: x[0], reverse=True)
     return out
 
@@ -1392,7 +1558,7 @@ def agent_log_spot(root: Path, agent: str) -> tuple[str, int, str]:
         found = list(d.glob("*.md"))
         if not found:
             return
-        stems.update(f.stem for f in found)
+        stems.update(log_day(f.name) or f.stem for f in found)
         places.append(f"{label} {len(found)} 天")
 
     eat(root, "总册")
@@ -1771,13 +1937,13 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
         if role and legacy.is_file():
             problems.append((
                 3, f"agent {name}",
-                f"旧的 agents/{name}/SOUL.md 还在（现在读 roles/{role}/SOUL.md）",
-                "跑 `roles --migrate --dry` 看一眼再真跑；旧文件会进 archive/",
+                f"旧的 agents/{name}/SOUL.md 还在（现在只读 roles/{role}/SOUL.md）",
+                "直接删掉它——0.6.6 起不再回退读旧位置；想留底就先挪进 archive/",
             ))
-        elif not role and not legacy.is_file():
+        elif not role:
             problems.append((
                 3, f"agent {name}",
-                "没有可注入的人格：既没配角色卡，也没有 agents/<id>/SOUL.md",
+                "没有可注入的人格：没配角色卡，defaultRole 也是空的",
                 "配 config.roles 并建 roles/<role>/SOUL.md，或跑 `roles --migrate`",
             ))
         elif role_src == "config.defaultRole":
@@ -1785,13 +1951,6 @@ def collect_checkup(root: Path, all_projects: bool = False) -> dict:
                 3, f"agent {name}",
                 f"没在 config.roles 里，回退到 defaultRole={role}",
                 "要固定这张卡就写进 roles；故意回退的话这条可以不管",
-            ))
-        if (agent_dir / "IDENTITY.md").is_file():
-            problems.append((
-                3, f"agent {name}",
-                "IDENTITY.md 还在，身份已并入 SOUL.md",
-                "跑 `persona --merge-identity` 收口，原文件会移到 archive/",
-                {"kind": "merge_identity", "agent": name},
             ))
 
     # 1. playbooks / topics 的元信息质量
@@ -2102,17 +2261,6 @@ def _run_fix(root: Path, fix: dict) -> str:
         backup(p, root)
         write_index(root, text, drifts)
         return f"同步了 {len(drifts)} 张表"
-
-    if kind == "merge_identity":
-        agent = str(fix.get("agent") or "")
-        buf = io.StringIO()
-        # merge_identity 是给人用的 CLI 函数，会 print；接口调用时截下来塞进结果，
-        # 免得服务端日志里混进一段 CLI 输出
-        with contextlib.redirect_stdout(buf):
-            rc = merge_identity(root, agent or None)
-        if rc != 0:
-            raise RuntimeError(buf.getvalue().strip()[:300] or "合并失败")
-        return f"{agent or '所有 agent'} 的 IDENTITY.md 已并入 SOUL.md"
 
     if kind == "config_sync_off":
         cfg = _read_config_strict(root)
@@ -2934,7 +3082,6 @@ def cmd_init_agent(root: Path, agent: str, source: str | None = None, role: str 
             return 1
 
     today = date.today().isoformat()
-    harness = agent.rsplit("-", 1)[-1] if "-" in agent else "unknown"
 
     folder.mkdir(parents=True, exist_ok=True)
     # log/ 留着：没有项目册时 log_dir_for() 会退回总册的 agents/<id>/log。
@@ -2951,7 +3098,7 @@ def cmd_init_agent(root: Path, agent: str, source: str | None = None, role: str 
             text = read(src_card).rstrip("\n") + "\n\n---\n\n_从 `" + rel + "` 复制于 " + today + "。"
             text += "之后两边独立演化，不自动同步。_\n"
         else:
-            text = AGENT_TEMPLATES["SOUL.md"].format(today=today, agent=agent, harness=harness)
+            text = AGENT_TEMPLATES["SOUL.md"].format(today=today, agent=agent)
         card.write_text(text, encoding="utf-8", newline="\n")
         created = True
 
@@ -2971,129 +3118,10 @@ def cmd_init_agent(root: Path, agent: str, source: str | None = None, role: str 
     return 0
 
 
-# 旧 IDENTITY.md 的字段 → SOUL frontmatter 的键。Emoji 不在表里：2026-10-27 起删除，
-# 它零引用，而且等宽字体下 ♑ 会渲染成方框。
-IDENTITY_FIELD_MAP = [
-    ("Name", "name"),
-    ("Creature", "identity"),
-]
-
-# 旧 IDENTITY.md 的正文小节 → SOUL 的小节。前两个整节丢弃：
-# 「名字」讲字段的由来，「我怎么介绍自己」与 name/identity/roster 三处重叠。
-IDENTITY_SECTION_MAP = {"称呼": "称呼"}
-
-
 def _fm_get(fm_text: str, key: str) -> str:
     """从 frontmatter 原文里取一个键。取不到给空串。"""
     m = re.search(rf"^{re.escape(key)}:\s*(.*)$", fm_text, re.M)
     return m.group(1).strip() if m else ""
-
-
-def merge_identity(root: Path, agent: str | None = None, dry: bool = False) -> int:
-    """把 agents/<id>/IDENTITY.md 并进同目录的 SOUL.md。
-
-    只搬不润色：字段按 IDENTITY_FIELD_MAP 进 frontmatter，正文按
-    IDENTITY_SECTION_MAP 搬到同名小节，其余整节丢弃（内容按判定树已归位）。
-    幂等：SOUL 已有该字段/该小节就跳过，可以反复跑。搬完原文件移 archive/，
-    不删——记忆库是主人的数据，git 之外还得留一份能直接翻的。
-    """
-    agents_dir = root / "agents"
-    if not agents_dir.is_dir():
-        print(f"没有 agents 目录：{agents_dir}")
-        return 1
-
-    targets = [agent] if agent else sorted(
-        p.name for p in agents_dir.iterdir()
-        if p.is_dir() and (p / "IDENTITY.md").is_file()
-    )
-    # 已废弃的 agent（有 .legacy 标记）只报不改
-    stale = [a for a in targets if (agents_dir / a / ".legacy").exists()]
-    targets = [a for a in targets if a not in stale]
-    if not targets:
-        print("没有需要合并的 IDENTITY.md。")
-        if stale:
-            print(f"跳过已废弃的 agent：{', '.join(stale)}")
-        return 0
-
-    archive = root / "archive" / f"agents-identity-{date.today().isoformat()}"
-    for name in targets:
-        ident_path = agents_dir / name / "IDENTITY.md"
-        soul_path = agents_dir / name / "SOUL.md"
-        ident = read(ident_path)
-        fm_text, body = _meta_parts(ident)
-
-        fields = {}
-        for old_key, new_key in IDENTITY_FIELD_MAP:
-            m = re.search(rf"^[-*]\s*\*\*{re.escape(old_key)}:\*\*\s*(.*)$", ident, re.M)
-            value = (m.group(1).strip() if m else "")
-            if value:
-                fields[new_key] = value
-
-        carried = []
-        for old_title, new_title in IDENTITY_SECTION_MAP.items():
-            inner = _section_inner(body, old_title)
-            if not inner:
-                continue
-            # 旧文件的小节取到文件尾，会连分隔线和尾注一起带出来，只留第一段
-            inner = inner.split("\n---")[0].strip()
-            if inner:
-                carried.append((new_title, inner))
-
-        if dry:
-            print(f"\n[{name}]")
-            print(f"  字段：{fields or '（无）'}")
-            print(f"  小节：{[t for t, _ in carried] or '（无）'}")
-            print(f"  归档：{archive / f'{name}-IDENTITY.md'}")
-            continue
-
-        if soul_path.is_file():
-            soul = read(soul_path)
-            backup(soul_path, root)
-        else:
-            soul = AGENT_TEMPLATES["SOUL.md"].format(
-                today=date.today().isoformat(), agent=name, harness=name.rsplit("-", 1)[-1]
-            )
-        soul_fm, soul_body = _meta_parts(soul)
-
-        changed = []
-        for key, value in fields.items():
-            if _fm_get(soul_fm, key):
-                continue
-            soul_fm = _set_fm(soul_fm if soul_fm else "---\n---", key, value)
-            changed.append(key)
-        for title, inner in carried:
-            if _section_inner(soul_body, title) is not None:
-                continue
-            soul_body = _insert_section_before(soul_body, title, "禁区", inner)
-            changed.append(f"## {title}")
-
-        soul_fm = _set_fm(soul_fm, "updated", date.today().isoformat())
-        write(soul_path, _join_meta(soul_fm, soul_body))
-
-        archive.mkdir(parents=True, exist_ok=True)
-        target = archive / f"{name}-IDENTITY.md"
-        if target.exists():
-            target = archive / f"{name}-IDENTITY-{datetime.now().strftime('%H%M%S')}.md"
-        shutil.move(str(ident_path), str(target))
-
-        print(f"[{name}] 合并完成：{', '.join(changed) if changed else '无变化'}")
-        print(f"  IDENTITY.md → {relative_to_root(root, target)}")
-
-    if dry:
-        print("\n（--dry：什么都没写）")
-    else:
-        print(f"\n归档目录：{relative_to_root(root, archive)}")
-    return 0
-
-
-def cmd_persona(root: Path, argv: list[str]) -> int:
-    """persona 子命令族。目前只有 --merge-identity。"""
-    agent = flag(argv, "--agent") or None
-    dry = "--dry" in argv
-    if "--merge-identity" in argv:
-        return merge_identity(root, agent, dry)
-    print("用法：persona --merge-identity [--agent <id>] [--dry]")
-    return 2
 
 
 PROJECT_META = """---
@@ -3505,8 +3533,6 @@ def main(argv: list[str]) -> int:
         return cmd_track(root, argv)
     if cmd == "skills":
         return cmd_skills(root, argv)
-    if cmd == "persona":
-        return cmd_persona(root, argv)
     if cmd == "roles":
         return cmd_roles(root, argv)
     if cmd == "init":

@@ -162,7 +162,8 @@ def agent_logs(root: Path, name: str, books: list[dict]) -> dict:
         if not d.is_dir():
             continue
         for f in sorted(d.glob("*.md")):
-            seen.setdefault(f.stem, src)
+            day = getattr(mem, "log_day", None)
+            seen.setdefault((day(f.name) if day else "") or f.stem, src)
     days = sorted(seen)
     return {
         "latestLog": days[-1] if days else "",
@@ -339,8 +340,8 @@ def apply_config_patch(root: Path, patch: dict) -> dict:
 AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 
-# 2026-10-27 起人格只有 SOUL.md 一个文件：身份/称呼并进 SOUL，IDENTITY.md
-# 由 `memory.py persona --merge-identity` 收口。留着旧名会让 UI 以为还能写它。
+# 2026-10-27 起人格只有 SOUL.md 一个文件：身份/称呼并进 SOUL，旧 IDENTITY.md
+# 的合并工具已在 0.6.6 删除。留着旧名会让 UI 以为还能写它。
 PERSONA_FILES = ("SOUL.md",)
 
 
@@ -393,10 +394,14 @@ def write_persona(root: Path, agent: str, file: str, text: str, expect_mtime) ->
     agent 目录走。没配角色就拒绝——静默写回旧路径会让迁移看起来没做。
     """
     role, role_src = role_of_agent(root, agent)
-    if not role:
+    # 写必须走显式映射：defaultRole 是给「读」兜底的，拿它写等于几个 agent 共用
+    # 一张卡时互相覆盖——一个拼错的 agent id 就能悄悄改掉 advisor 的人格。
+    explicit = getattr(mem, "role_map", lambda r: {})(root).get(agent)
+    if not role or not explicit:
         raise mem.MetaError(
             "missing",
-            f"{agent} 还没配角色卡（config.roles 里没有它，defaultRole 也空）",
+            f"{agent} 还没配角色卡（config.roles 里没有它）；"
+            f"defaultRole 只兜底读，不拿来写——先跑 roles --map {agent} <role>",
         )
     p = persona_path(root, role, file)
     if not isinstance(text, str):
@@ -747,7 +752,7 @@ def self_test(root: Path) -> int:
             days = set()
             for d in [root / "agents" / name / "log"] + [Path(b["book"]) / "log" / name for b in books]:
                 if d.is_dir():
-                    days |= {f.stem for f in d.glob("*.md")}
+                    days |= {mem.log_day(f.name) or f.stem for f in d.glob("*.md")}
             expect[name] = len(days)
         got = {a["id"]: a["logDays"] for a in (ov.get("agents") or [])}
         check("日志天数跨项目册聚合", got == expect, f"{got}")
@@ -816,6 +821,28 @@ def self_test(root: Path) -> int:
                 "agent": "zz-selftest", "file": "IDENTITY.md", "text": "x"})
             check("POST /api/persona 拒收 IDENTITY.md", code == 400, f"{code}")
 
+            # roles --new / --map / --default：建卡不覆盖、映射落 config、defaultRole 兜底
+            new_card = root / "roles" / "zz-new" / "SOUL.md"
+            rc = mem.roles_new(root, ["--new", "zz-new", "--blank"])
+            check("roles --new 建卡（--blank）",
+                  rc == 0 and new_card.is_file() and "name: zz-new" in new_card.read_text(encoding="utf-8"),
+                  f"rc={rc}")
+            new_card.write_text("MARK\n", encoding="utf-8")
+            rc = mem.roles_new(root, ["--new", "zz-new", "--blank"])
+            check("roles --new 不覆盖已有卡",
+                  rc == 1 and new_card.read_text(encoding="utf-8") == "MARK\n", f"rc={rc}")
+            rc = mem.roles_map_agent(root, ["--map", "zz-selftest", "zz-new"])
+            cfg_after = json.loads(cfg_p.read_text(encoding="utf-8"))
+            check("roles --map 写 config.roles",
+                  rc == 0 and (cfg_after.get("roles") or {}).get("zz-selftest") == "zz-new",
+                  f"rc={rc} {(cfg_after.get('roles') or {}).get('zz-selftest')}")
+            rc = mem.roles_set_default(root, ["--default", "zz-new"])
+            cfg_after = json.loads(cfg_p.read_text(encoding="utf-8"))
+            role_fb, _src = mem.resolve_role(root, "zz-unmapped", cfg_after)
+            check("defaultRole 兜底：未映射的 agent 也解析出角色",
+                  rc == 0 and cfg_after.get("defaultRole") == "zz-new" and role_fb == "zz-new",
+                  f"rc={rc} role={role_fb}")
+
             tmp_md.write_text("# 自检\n", encoding="utf-8")
             code, data = _post(f"{base}/api/file", {
                 "path": "shared/zz-selftest.md", "text": "# 自检改\n",
@@ -830,6 +857,7 @@ def self_test(root: Path) -> int:
         finally:
             shutil.rmtree(tmp_agent, ignore_errors=True)
             shutil.rmtree(tmp_role, ignore_errors=True)
+            shutil.rmtree(root / "roles" / "zz-new", ignore_errors=True)
             if cfg_orig is not None:
                 cfg_p.write_text(cfg_orig, encoding="utf-8")
             else:
