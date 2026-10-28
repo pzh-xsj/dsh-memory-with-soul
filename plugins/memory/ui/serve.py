@@ -68,6 +68,7 @@ DEFAULT_PORT = 8765
 PORT_TRIES = 20
 MAX_FILE_BYTES = 2 * 1024 * 1024
 BACKUP_SUBDIR = Path(".state") / "ui-backups"
+READONLY_DIRS = {"archive"}
 
 # 服务端允许改的配置键：(类型, 最小值, 最大值)。不在表里的一律拒绝，
 # 免得前端一个手滑把 inject.order 清空——那等于人格注入消失。
@@ -148,13 +149,13 @@ def pick_agent(root: Path, cfg: dict, wanted: str | None = None) -> tuple[str, b
 
 
 def agent_logs(root: Path, name: str, books: list[dict]) -> dict:
-    """日志住在各项目册的 `log/<agent>/`，总册 `agents/<agent>/log` 是老位置，也认。
+    """日志住在各项目册的 `log/<agent>/`，总册没有项目册时退到 `log/<agent>`。
 
-    只看老位置会读出一份过期数据（本机 moxie-wb 显示 2026-10-25、1 天，
-    实际项目册里已有 2 天），所以两边合起来算天数。
+    老位置 `agents/<agent>/log` 0.6.7 起不再写也不再读：那里留着只会读出
+    过期数据（本机 moxie 曾显示 2026-10-25、1 天，项目册里已有两天）。
     """
     seen: dict[str, str] = {}
-    dirs: list[tuple[Path, str]] = [(root / "agents" / name / "log", "总册")]
+    dirs: list[tuple[Path, str]] = [(root / "log" / name, "总册")]
     for b in books:
         if b.get("state") == "ok":
             dirs.append((Path(b["book"]) / "log" / name, b["id"]))
@@ -426,12 +427,15 @@ def write_text(root: Path, rel: str, text: str, expect_mtime) -> dict:
 
     只放 `.md`：这个页面是「看记忆、改记忆」，不是文件管理器；放开后缀等于
     把 config.json 和插件代码也交出去。`.state` / `.git` 另有用途，一律不写。
+    顶层 `archive/` 只读：归档要回答「当时为什么这么定」，改了就查不回去了。
     """
     p = safe_path(root, rel)
     if p.suffix.lower() != ".md":
         raise ValueError("只允许保存 .md 文件")
     if {".state", ".git"} & set(p.parts):
         raise ValueError(".state / .git 下的文件不给写")
+    if READONLY_DIRS & set(p.relative_to(root).parts[:1]):
+        raise ValueError("archive/ 下的文件只读：归档是历史记录，改了就查不回去了")
     if not p.is_file():
         raise FileNotFoundError(rel)
     if not isinstance(text, str):
@@ -745,12 +749,12 @@ def self_test(root: Path) -> int:
                   and (data.get("injected") or {}).get("kind") == "engineering")
             check("cwd 向上找到项目册（kind 跟着来）", ok, f"{got_book!r}")
 
-        # 日志天数：跨项目册聚合，只看总册 agents/<id>/log 会读到过期数据
+        # 日志天数：跨项目册聚合，总册看 log/<agent>（老 agents/<agent>/log 不再读）
         books = [b for b in mem.project_books(root) if b.get("state") == "ok"]
         expect = {}
         for name in names:
             days = set()
-            for d in [root / "agents" / name / "log"] + [Path(b["book"]) / "log" / name for b in books]:
+            for d in [root / "log" / name] + [Path(b["book"]) / "log" / name for b in books]:
                 if d.is_dir():
                     days |= {mem.log_day(f.name) or f.stem for f in d.glob("*.md")}
             expect[name] = len(days)
@@ -851,6 +855,30 @@ def self_test(root: Path) -> int:
                       f"rc={rc} role={role_fb}")
             finally:
                 shutil.rmtree(roles_root, ignore_errors=True)
+
+            # archive 只读：拦在 is_file() 之前，所以不需要真文件
+            try:
+                write_text(root, "archive/zz-selftest.md", "x", None)
+                ro_blocked = False
+            except ValueError as exc:
+                ro_blocked = "只读" in str(exc)
+            check("archive/ 拒写（服务端）", ro_blocked, "write_text 没拦住归档")
+
+            # 日志兜底与读侧同一条路：没有项目册时是 log/<agent>
+            check("log_dir_for 兜底到 log/<agent>",
+                  mem.log_dir_for(None, Path(root), "moxie") == Path(root) / "log" / "moxie",
+                  str(mem.log_dir_for(None, Path(root), "moxie")))
+
+            logs_root = Path(tempfile.mkdtemp(prefix="zz-logs-"))
+            try:
+                (logs_root / "log" / "moxie").mkdir(parents=True)
+                (logs_root / "log" / "moxie" / "2026-10-01.md").write_text("x", encoding="utf-8")
+                got = agent_logs(logs_root, "moxie", [])
+                check("概览日志天数读 log/<agent>",
+                      got["logDays"] == 1 and "总册" in got["logWhere"],
+                      f"{got}")
+            finally:
+                shutil.rmtree(logs_root, ignore_errors=True)
 
             tmp_md.write_text("# 自检\n", encoding="utf-8")
             code, data = _post(f"{base}/api/file", {

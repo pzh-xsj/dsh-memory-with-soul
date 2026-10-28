@@ -395,13 +395,14 @@ def recent_logs(log_dir: Path, days: int = 3) -> list[Path]:
 def log_dir_for(project: Path | None, root: Path, agent: str) -> Path:
     """日志目录只有这一处定义，避免三份代码各自拼路径漂移。
 
-    有项目册写项目册，没有才退回总册的 agent 私有日志。
+    有项目册写项目册，没有才退回总册的 `log/<agent>`（0.6.7 起与读侧一致：
+    `status` / 设置页概览扫的都是 `log/<agent>`，不再看 `agents/<id>/log`）。
     注意：调用方必须把 agent 带上（`log/<agent>`）。只传 `log` 不会报错，
     只会静默返回空——未提炼提醒就永远不响了。
     """
     if project:
         return project / "log" / agent
-    return root / "agents" / agent / "log"
+    return root / "log" / agent
 
 
 def unextracted(log_dir: Path, days: int = 3) -> list[tuple[str, int, str]]:

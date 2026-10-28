@@ -121,6 +121,8 @@ check('页面 200', page.status === 200, String(page.status))
 check('注入了 API_BASE', html.includes('window.__MEMORY_API_BASE__="/api/memory"'))
 check('注入了 EMBEDDED', html.includes('window.__MEMORY_EMBEDDED__=true'))
 check('页面有七个页签', ['概览', '项目册', '记忆', '人格', '用户', '体检', '设置'].every((t) => html.includes(t)))
+check('记忆页有 archive 分组', html.includes('data-f="archive"'))
+check('记忆页没有恒空的 agents / log 分组', !html.includes('data-f="agents"') && !html.includes('data-f="log"'))
 
 const css = await routes.get(`${API_PREFIX}/style.css`).fetch(new Request(`http://127.0.0.1:1${API_PREFIX}/style.css`))
 check('样式表 200', css.status === 200, String(css.status))

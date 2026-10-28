@@ -3084,8 +3084,6 @@ def cmd_init_agent(root: Path, agent: str, source: str | None = None, role: str 
     today = date.today().isoformat()
 
     folder.mkdir(parents=True, exist_ok=True)
-    # log/ 留着：没有项目册时 log_dir_for() 会退回总册的 agents/<id>/log。
-    (folder / "log").mkdir(exist_ok=True)
 
     card = role_card(root, role)
     created = False

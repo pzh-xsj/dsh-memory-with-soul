@@ -168,15 +168,14 @@
 <section id="tab-memory" class="tab">
   <div class="card">
     <h2>记忆文件 <span class="sub" id="memSub"></span></h2>
-    <p class="hint">自由文本编辑要走浏览器目录授权；没连目录时这里是只读预览。</p>
+    <p class="hint">这里看的是总册（<code>~/.memory</code>）；项目册在「项目册」页签，日志在各项目册的 <code>log/</code>。归档只读。</p>
     <div class="toolbar">
       <input type="search" id="memSearch" placeholder="按路径过滤…">
       <div class="chips" id="memChips">
         <button class="chip active" data-f="all">全部</button>
         <button class="chip" data-f="shared">shared</button>
-        <button class="chip" data-f="agents">agents</button>
-        <button class="chip" data-f="log">log</button>
         <button class="chip" data-f="roles">roles</button>
+        <button class="chip" data-f="archive">archive</button>
       </div>
     </div>
   </div>
@@ -258,7 +257,7 @@
     <p class="hint">这里只读服务端算出来的结果，不在前端重写规则——上一版就是抄了一份，架构一变就全错。标了「修复」的那几行是确定性的机械问题：先备份再改，修完重新体检。</p>
     <div class="actions" style="margin-top:0">
       <button id="ckRun">重新体检</button>
-      <button class="primary" id="ckFix" disabled title="只修确定性的四类：索引同步、IDENTITY 合并、关掉没用上的 sync、删未知配置键">修可修的 0 项</button>
+      <button class="primary" id="ckFix" disabled title="只修确定性的三类：索引同步、关掉没用上的 sync、删未知配置键">修可修的 0 项</button>
       <label class="hint" style="display:flex;gap:6px;align-items:center">
         <input type="checkbox" id="ckAll"> 扫所有登记的项目册
       </label>
@@ -961,6 +960,9 @@ function renderTree() {
     if (S.filter !== "all" && !f.path.startsWith(S.filter + "/") && f.path !== S.filter) return false;
     return true;
   });
+  $("#memSub").textContent = S.filter === "all" && !q
+    ? `${S.tree.length} 个 md 文件`
+    : `${files.length} / ${S.tree.length} 个 md 文件`;
   if (!files.length) {
     box.append(h("p", { class: "empty", text: S.tree.length ? "没有匹配的文件" : "没有可读的 md 文件" }));
     return;
@@ -1003,6 +1005,11 @@ function renderTree() {
   for (const dir of [...root.dirs.values()].sort(byName)) box.append(dirNode(dir));
 }
 
+/** 归档只读：服务端也拒写（ui/serve.py 的 READONLY_DIRS），前端先把按钮按住。 */
+function isArchive(path) {
+  return path === "archive" || path.startsWith("archive/");
+}
+
 async function openMemoryFile(path) {
   const ta = $("#memText");
   try {
@@ -1018,13 +1025,20 @@ async function openMemoryFile(path) {
     $("#memPath").textContent = path;
     ta.value = text;
     markDirty("memory", false);
-    const writable = S.server || !!S.handle;
-    $("#memBadge").textContent = S.server ? "可编辑（服务端）" : (S.handle ? "可编辑（目录）" : "只读");
+    const archived = isArchive(path);
+    const writable = (S.server || !!S.handle) && !archived;
+    if (archived) {
+      $("#memBadge").textContent = "归档 · 只读";
+    } else {
+      $("#memBadge").textContent = S.server ? "可编辑（服务端）" : (S.handle ? "可编辑（目录）" : "只读");
+    }
     $("#memBadge").className = "badge " + (writable ? "ok" : "warn");
     ta.disabled = !writable;
-    $("#memHint").textContent = S.server
-      ? "保存走服务端：写前备份到 .state/ui-backups，冲突会先问"
-      : (S.handle ? "保存走浏览器目录授权" : "没连服务端也没连目录：只能预览");
+    $("#memHint").textContent = archived
+      ? "归档只当历史看：它要回答「当时为什么这么定」，服务端也拒写"
+      : (S.server
+        ? "保存走服务端：写前备份到 .state/ui-backups，冲突会先问"
+        : (S.handle ? "保存走浏览器目录授权" : "没连服务端也没连目录：只能预览"));
     // 选中的文件要把祖先目录展开，否则它藏在折叠的目录里
     const parts = path.split("/").slice(0, -1);
     for (let i = 0; i < parts.length; i += 1) S.openDirs.set(parts.slice(0, i + 1).join("/"), true);
@@ -2102,9 +2116,10 @@ $("#pbList").addEventListener("click", (e) => {
 
 function refreshButtons() {
   const hasFile = !!S.file;
-  const writable = S.server || !!S.handle;
+  const archived = !!S.file && isArchive(S.file.path);
+  const writable = (S.server || !!S.handle) && !archived;
   $("#memSave").disabled = !(hasFile && writable);
-  $("#memRevert").disabled = !hasFile;
+  $("#memRevert").disabled = !(hasFile && !archived);
   $("#soulSave").disabled = !(S.soul && S.soul.sections.length && S.soul.role);
   $("#soulReload").disabled = !S.agent;
   const userOk = !!(S.user && S.user.sections.length && writable);
