@@ -144,7 +144,7 @@ await check('tool/call(read) → track 带 --paths', async () => {
   await host.fire('session/event', session, {
     surfaceOp: 'append',
     type: 'tool/call',
-    data: { turn: 1, step: 1, callId: 'c1', name: 'read', arguments: JSON.stringify({ file_path: 'C:\\Users\\<user>\\.memory\\shared\\focus.md' }) },
+    data: { turn: 1, step: 1, callId: 'c1', name: 'read', arguments: JSON.stringify({ file_path: 'C:\\Users\\someone\\.memory\\shared\\focus.md' }) },
   })
   await settle()
 

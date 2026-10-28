@@ -14,7 +14,7 @@ description: "把当前对话里值得留下的内容写进记忆库。用户输
 | 册子 | 路径 | 装什么 |
 | --- | --- | --- |
 | **项目册** | `<workspace>/.memory/`（从 cwd 向上找 `_meta.md`） | 只对这一部小说 / 这一个工程成立的东西 |
-| **总册** | `~/.memory/` | 跨项目、跨领域、关于主人本人的东西 |
+| **总册** | `~/.memory/` | 跨项目、跨领域、关于用户本人的东西 |
 
 判定顺序（越具体的作用域优先）：
 
@@ -22,7 +22,7 @@ description: "把当前对话里值得留下的内容写进记忆库。用户输
 2. 换一个领域（小说 ↔ 科研 ↔ 工程）还成立吗？→ 不成立，进 `shared/playbooks/<领域>/<类型>.md`
 3. 换一个人用还成立吗？→ 不成立，进 `shared/user/preferences.md`
 4. 只对这个角色成立 → `roles/<当前角色>/SOUL.md`（先看 `python core/memory.py roles` 确认这个 agent 读哪张卡）
-   （当前 agent 的 id 形如 `moxie-wb` / `moxie-dsh`，注入内容第一行就写着。别猜。）
+   （agent id 就是人格名，注入内容第一行「agent: …」写着。别猜。）
 5. 都不是 → `shared/playbooks/general/<类型>.md`（**`general/` 目录现在还不存在**，按需建；空目录 git 不跟踪，建了只会让人以为「这块有人管了」）
 
 宽层只留指针，不重复正文。

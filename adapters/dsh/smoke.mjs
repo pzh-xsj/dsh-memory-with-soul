@@ -11,8 +11,9 @@
  * 退出码 0 = 全绿。
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -169,10 +170,22 @@ function runRenderer(cwd) {
   return out
 }
 
+// 三种 cwd 都在临时目录里造，不依赖本机任何路径：
+// 有项目册（临时 .memory/_meta.md + index.md）、无项目册（空目录）、路径不存在
+const smokeTmp = mkdtempSync(join(tmpdir(), 'memory-smoke-'))
+const withProject = join(smokeTmp, 'with-book')
+const NL = String.fromCharCode(10)
+mkdirSync(join(withProject, '.memory'), { recursive: true })
+writeFileSync(join(withProject, '.memory', '_meta.md'),
+  ['---', 'id: smoke-book', 'title: 临时项目册', 'status: 进行中', 'kind: engineering', '---', ''].join(NL), 'utf8')
+writeFileSync(join(withProject, '.memory', 'index.md'), ['# 临时项目册', '', '## 入口', ''].join(NL), 'utf8')
+const noProject = join(smokeTmp, 'no-book')
+mkdirSync(noProject, { recursive: true })
+
 const cases = [
-  ['有项目册', process.env.MEMORY_SMOKE_CWD ?? 'C:\\work\\ws'],
-  ['无项目册', 'C:\\Users\\<user>'],
-  ['路径不存在', 'C:\\__memory_smoke_missing__'],
+  ['有项目册', process.env.MEMORY_SMOKE_CWD ?? withProject],
+  ['无项目册', noProject],
+  ['路径不存在', join(smokeTmp, '__missing__')],
 ]
 
 if (python === null) {
@@ -302,6 +315,10 @@ check('左侧栏入口 / 浏览器半边已声明', () => {
   )
   must(pkg.dsh?.client?.platform === 'web', 'package.json 缺 dsh.client.platform')
   must(pkg.files?.includes('adapters'), 'files 里没有 adapters，client.js 会漏')
+  // 宿主按包名找客户端模块：这段 id 与 package.json 的 name 不一致时，
+  // 启动会报 `entry did not activate / <pkg>: import failed`（0.7.0 踩过一次）。
+  const bundleId = /id:\s*'([^']+)'/.exec(bundle)?.[1] ?? ''
+  must(bundleId === pkg.name, `client 的模块 id 是 ${bundleId || '（缺）'}，应等于包名 ${pkg.name}`)
   // 侧栏行与 main 面板靠同一个 id 连线：id 变了 key 没变，点进去就是空白。
   must(/name:\s*'main'/.test(bundle) && /key:\s*PANEL_ID/.test(bundle), '没注册 main 面板，或 key 没跟 id 共用')
   must(/name:\s*'sidebar\.panellist'/.test(bundle) && /id:\s*PANEL_ID/.test(bundle), '没注册 sidebar.panellist，或 id 没跟面板共用一个常量')
@@ -323,6 +340,8 @@ for (const item of checks) {
   }
   delete item.pending
 }
+
+rmSync(smokeTmp, { recursive: true, force: true })
 
 let failed = 0
 for (const item of checks) {

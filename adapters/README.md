@@ -42,11 +42,10 @@ per-agent 的东西注册在 `agent/created` 拿到的 `agent.ctx` 上。
 ```
 adapters/dsh/
   index.js           apply(ctx, config)：agent/created → 渲染 → inject
-  package.json       @local/dsh-memory-inject，dsh.bundle.patch 指向 cordis.patch.yml
-  cordis.patch.yml   - insert: [{ id: memory-inject, name: '@local/dsh-memory-inject' }]
+  cordis.patch.yml   - insert: [{ id: memory-inject, name: 'dsh-memory-with-soul' }]
   locale/{zh,en}.json  meta.title / meta.description
   icon.svg           952 B
-  smoke.mjs          9 项自检，不需要装进 DSH 就能跑
+  smoke.mjs          19 项自检，不需要装进 DSH 就能跑
 ```
 
 ### 可调项（写在用户的 `cordis.patch.yml` 里，同 id 整行覆盖）
@@ -54,48 +53,45 @@ adapters/dsh/
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 关掉注入，不动其他 |
-| `python` | `['python','py','E:\python\python.exe']` | 按顺序试；含路径分隔符的当绝对路径 |
+| `python` | `['python','python3','py']` | 按顺序试；含路径分隔符的当绝对路径 |
 | `renderer` | 空 | 留空自动找 `core/render.py`；`sourceRoot` 只是兜底 |
-| `sourceRoot` | 本仓库的 `plugins/memory` | 插件被复制进 node_modules（而非软链）时用它兜底找渲染器 |
-| `harness` | `dsh` | 决定 agent id 后缀 |
-| `agentName` | 空 | 直接指定 agent id，留空则 `<config.defaultAgent>-<harness>` |
+| `sourceRoot` | 空 | 插件被复制进 node_modules（而非软链）时用它兜底找渲染器 |
+| `harness` | `dsh` | 只进日志与注入头（0.6.6 起不再拼进 agent id） |
+| `agentName` | 空 | 直接指定 agent id，留空则用 `config.defaultAgent` |
 | `timeoutMs` | `10000` | 超时先 `terminate()` 再强杀 |
 | `injectSubagents` | `false` | 子 agent 不该吃掉一份上下文（靠 `session.header.origin === 'subagent'` 判，**不能用 parentSession，fork 也带**） |
 | `cwd` | 插件根 | 只影响相对路径解析 |
 
-### 装（必须由人工点，命令行装不了）
+### 装
 
-1. Web 左侧栏点 **插件**
-2. **添加插件** 旁的箭头 → **选择添加插件方式** → **安装第三方插件**
-3. 「包名或地址」填绝对路径（相对路径 Host 直接拒）：
-   ```
-   C:\Users\<user>\.workbuddy-ai\plugins\marketplaces\local-moxie\plugins\memory\adapters\dsh
-   ```
-4. **安装** → pnpm 跑完 → 完成页点 **立即启用**（不点就是装好了但关着）
-5. 提示 **请重启 DSH 使更改生效** 就重启一次
+包根是一整个 npm 包，装它就等于装 Python 侧 + 设置页 + skills：
 
-- 装完看 `application` / `warnings`：`overridden` = 被高层覆盖，`restart-required` = 还没生效。
-- **不要**手改 `~/.dsh/profiles/desktop/package.json` 或 `cordis.patch.yml`，也不要跑 pnpm。
+```bash
+dsh plugin --profile desktop add dsh-memory-with-soul
+```
+
+开发时也可以让 profile 直接指向本仓库（`"dsh-memory-with-soul": "link:E:/path/to/memory-plugin"`，
+见根目录 `README.md`）。装完重启一次 DSH 才会挂上。
 
 ### 验
 
 ```bash
-cd "C:/Users/<user>/.workbuddy-ai/plugins/marketplaces/local-moxie/plugins/memory/adapters/dsh"
-node smoke.mjs          # 9/9 通过 = 清单、模块、渲染器三关都过
+cd <插件根>/adapters/dsh     # 包根是 <插件根>，adapters/dsh 只是它的子目录
+node smoke.mjs          # 19/19 通过 = 清单、模块、渲染器、路由、左侧栏五关都过
 ```
 
 真装进 DSH 之后再看两处：
 
-1. `~/.memory/.state/session-start-moxie.json` 里 `harness: dsh`、`agent: moxie`
-2. 新会话里**没有** `~/.dsh/AGENTS.md` 那份手抄块——装上注入后它必须收缩成「人格 + 路由 + 故障提示」，
-   否则同一个人格吃两遍 token（这就是 Step 0b，等安装成功再做）
+1. `~/.memory/.state/session-start-<agent>.json` 里 `harness: dsh`、`agent` 与你设的 id 一致
+2. 新会话里**没有**重复的手抄人格块——注入接管以后，`AGENTS.md` 只该留「人格摘要 + 路由 + 故障提示」，
+   否则同一个人格吃两遍 token
 
 ### 故障特征
 
 | 现象 | 去哪看 |
 | --- | --- |
 | 新会话没有记忆块 | 日志里找 `记忆注入` 的 warn：渲染器缺失 / 找不到 python / 非零退出 / 空输出 |
-| 有块但 agent 名是 `moxie-unknown` | `MEMORY_HARNESS` 没传进去（`inject` 里少了 `subprocess`） |
+| 有块但 agent 名不对 | `MEMORY_AGENT` / `agentName` 与实际不符 |
 | 会话建不起来 | 监听器抛了异常——`agent/created` 是 serial 派发，**抛错会回滚整个 agent 创建** |
 | 块重复两遍 | 旧的手抄 `AGENTS.md` 没收缩（Step 0b） |
 

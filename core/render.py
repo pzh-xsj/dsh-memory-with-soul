@@ -10,16 +10,16 @@ DSH 适配器以子进程跑本脚本、把 stdout 包成一条 user 消息注�
 3. 项目册入口 + 项目册最近日志（按 cwd 向上找）
 4. 总册内容（config.json 的 inject.order）
 
-身份：agent_id 就是人格名（0.6.6 起不带 harness），例如 moxie。
+身份：agent_id 就是人格名（0.6.6 起不带 harness），例如 `alice`。
 harness 靠 MEMORY_HARNESS → transcript_path → 插件路径判定，只进日志与头部，不拼进 agent_id。
 payload 里没有 agent 字段，同一 harness 换专家认不出来，只能靠 MEMORY_AGENT 手工覆盖。
 
 用法：
     python core/render.py              # 从 stdin 读 hook 输入（正常用法）
     python core/render.py --dry        # 不读 stdin，直接打印（手动测试）
-    python core/render.py --dry --cwd "D:\\某项目"   # 指定 cwd 测试项目册定位
+    python core/render.py --dry --cwd /path/to/project   # 指定 cwd 测试项目册定位
 
-    python core/render.py --dry --agent moxie --role advisor   # 指定身份与角色卡
+    python core/render.py --dry --agent alice --role writer   # 指定身份与角色卡
     python core/render.py --dry --subagent            # 按子 agent 的卡渲染（roles.subagent）
 环境变量：
     MEMORY_DIR      记忆库路径，默认 ~/.memory
@@ -368,7 +368,7 @@ def load(
     head += f"# 长期记忆（agent: {agent}，harness: {harness}，库：{root}）\n\n"
     head += (
         "以下是你的持久人格与记忆，先读完再回复。以它为准；"
-        "若与当前对话冲突，优先相信主人最新的表述，并把差异写回记忆。\n"
+        "若与当前对话冲突，优先相信用户最新的表述，并把差异写回记忆。\n"
     )
     head += (
         "\n"

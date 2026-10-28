@@ -3,3 +3,6 @@ __pycache__/
 *.pyo
 .DS_Store
 *.tgz
+node_modules/
+.state/
+*.log

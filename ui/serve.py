@@ -133,9 +133,8 @@ def backup(path: Path, root: Path) -> Path | None:
 def pick_agent(root: Path, cfg: dict, wanted: str | None = None) -> tuple[str, bool]:
     """挑一个真实存在的身份来预演注入。
 
-    返回 (身份, 是否回退过)。`config.defaultAgent` 可能指向已经删掉的目录
-    （本机就写着 `moxie`，2026-10-26 已删），不校验的话预演会显示一个
-    「缺 SOUL / 没有日志」的空身份，看的人会误以为记忆库坏了。
+    返回 (身份, 是否回退过)。`config.defaultAgent` 可能指向已经删掉的目录，
+    不校验的话预演会显示一个「缺 SOUL / 没有日志」的空身份，看的人会误以为记忆库坏了。
     """
     names = mem.list_agents(root)
     if wanted and wanted in names:
@@ -145,14 +144,14 @@ def pick_agent(root: Path, cfg: dict, wanted: str | None = None) -> tuple[str, b
             return cand, bool(wanted and wanted != cand)
     if names:
         return names[0], bool(wanted and wanted != names[0])
-    return (wanted or "moxie"), False
+    return (wanted or "default"), False
 
 
 def agent_logs(root: Path, name: str, books: list[dict]) -> dict:
     """日志住在各项目册的 `log/<agent>/`，总册没有项目册时退到 `log/<agent>`。
 
     老位置 `agents/<agent>/log` 0.6.7 起不再写也不再读：那里留着只会读出
-    过期数据（本机 moxie 曾显示 2026-10-25、1 天，项目册里已有两天）。
+    过期数据（配置里的 defaultAgent 早就断更、项目册里日志更多）会让概览显示错的「几天」。
     """
     seen: dict[str, str] = {}
     dirs: list[tuple[Path, str]] = [(root / "log" / name, "总册")]
@@ -535,7 +534,7 @@ class Handler(SimpleHTTPRequestHandler):
         raw = self.rfile.read(n)
         try:
             # 不是 UTF-8 就是客户端把本地编码直接发过来了（Windows 的 curl -d 常见），
-            # 这是请求的问题，不是服务端故障——回 400，别让主人对着 500 猜。
+            # 这是请求的问题，不是服务端故障——回 400，别让用户对着 500 猜。
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
             raise ValueError("请求体不是 UTF-8：Windows 上用 curl 传中文请加 --data-binary @文件，或让页面代发") from None

@@ -20,7 +20,9 @@
  */
 
 window.__ModuleLoader__.load({
-  id: '@local/dsh-memory-inject',
+  // 这个 id 必须等于 package.json 的 name：宿主按包名找客户端模块，
+  // 名字对不上就是「entry did not activate / import failed」。
+  id: 'dsh-memory-with-soul',
   factory: (require) => {
     const { createElement: h } = require('react')
 

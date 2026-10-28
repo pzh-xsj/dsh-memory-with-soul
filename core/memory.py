@@ -911,7 +911,7 @@ def create_playbook(
     ))
 
     # 建完立刻同步总索引：不同步的话下次体检第一条就是「索引漂移」，
-    # 而那条漂移是我自己造成的，不该让主人去点。
+    # 而那条漂移是我自己造成的，不该让用户去点。
     synced = 0
     try:
         synced = sync_index_quiet(root)
@@ -2843,7 +2843,7 @@ def norm_cell(cell: str) -> str:
 def merge_table(current: str, new_table: str, known: set[str]) -> str:
     """用新表替换程序维护的行，用户手写的其他行原样追加在末尾。
 
-    判断标准：第一列归一化后在 `known` 里的算「程序行」；其他行是主人自己加的，一律保留。
+    判断标准：第一列归一化后在 `known` 里的算「程序行」；其他行是用户自己加的，一律保留。
     """
     new_lines = new_table.splitlines()
     known_norm = {norm_cell(k) for k in known}
@@ -2921,7 +2921,7 @@ def sync_index_quiet(root: Path) -> int:
     """静默同步索引，返回改动的表数。给 init --project 用。
 
     不静默的话，建完项目册下次 checkup 第一条就是「索引漂移」——
-    那是我自己造成的，不该让主人去修。
+    那是我自己造成的，不该让用户去修。
     """
     index_path = root / "shared" / "index.md"
     if not index_path.is_file():
@@ -3019,7 +3019,7 @@ updated: {today}
 
 # SOUL.md - 我是谁
 
-_（待写：这个 agent 的底色。改它要告诉主人。）_
+_（待写：这个 agent 的底色。改它要告诉用户。）_
 
 ## 原则
 
@@ -3112,7 +3112,7 @@ def cmd_init_agent(root: Path, agent: str, source: str | None = None, role: str 
     print(f"角色卡：roles/{role}/SOUL.md（{'新建' if created else '已存在'}）")
     if changed:
         print(f"config.roles 写入：{agent} → {role}")
-    print("下一步写这张卡——人格是主人的地盘（设置页「人格」可直接改）。")
+    print("下一步写这张卡——人格是用户的地盘（设置页「人格」可直接改）。")
     return 0
 
 
@@ -3209,7 +3209,7 @@ _（每条带理由。想推翻先看理由，再给新证据。）_
 # ------------------------------------------------------------- 建册的四道守卫
 
 
-# 系统目录名（小写比较）。只列一定会长歪的地方，漏掉的交给主人判断
+# 系统目录名（小写比较）。只列一定会长歪的地方，漏掉的交给用户判断
 SYSTEM_DIRS = {
     "windows", "program files", "program files (x86)", "programdata",
     "system32", "syswow64", "usr", "etc", "bin", "sbin", "var", "opt",
@@ -3321,7 +3321,7 @@ def cmd_init_project(
     """建一个项目册骨架，并登记进 workspaces.json。
 
     项目册放 `<workspace>/.memory/`：跟项目走、就近可读、删目录时记忆一起删
-    （比留一堆「僵尸记忆」好）。目录名用 `.memory` 是主人定的——不污染项目根。
+    （比留一堆「僵尸记忆」好）。目录名用 `.memory` 是为了不污染项目根。
 
     `kind` 决定注入哪份 `playbooks/<kind>/method.md`。**故意不设默认值**：
     猜一个「engineering」会让「忘了传」变成静默错误，不如留空让 checkup 报出来。
@@ -3385,8 +3385,13 @@ def cmd_init_project(
     # 项目册独立 git：它跟项目走，不能混进工作区的仓库
     run_git(book, "init", "-q")
     run_git(book, "add", "-A")
+    # 提交身份可配（config.json 的 git.name / git.email），默认中性名字：
+    # 公开分发的插件不该把某一个人的名字写进别人的提交历史
+    ident = _config(root).get("git") or {}
+    who = str(ident.get("name") or "memory-plugin")
+    mail = str(ident.get("email") or "memory-plugin@local")
     run_git(
-        book, "-c", "user.name=moxie", "-c", "user.email=moxie@local",
+        book, "-c", f"user.name={who}", "-c", f"user.email={mail}",
         "commit", "-q", "-m", f"init: {title} 项目册骨架",
     )
     # 主仓库必须 ignore 它，否则只留一个 gitlink 灰格子
@@ -3480,7 +3485,7 @@ updated: {today}
 
 ## user
 
-- `user/profile.md` — 主人档案
+- `user/profile.md` — 用户档案
 - `user/preferences.md` — 稳定偏好
 """.format(
         today=date.today().isoformat(),

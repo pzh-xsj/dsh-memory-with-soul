@@ -219,7 +219,7 @@
   <div class="card">
     <h2>人格 <span class="sub" id="soulSub">角色卡 · 我是谁，以及怎么说话</span></h2>
     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px">
-      <div class="row"><label for="soulName">name · 名字</label><input type="text" id="soulName" placeholder="摩羯" disabled></div>
+      <div class="row"><label for="soulName">name · 名字</label><input type="text" id="soulName" placeholder="给这张卡起个名字" disabled></div>
       <div class="row"><label for="soulIdentity">identity · 身份</label><input type="text" id="soulIdentity" placeholder="半个秘书，半个参谋" disabled></div>
     </div>
     <p class="hint">这两行是 frontmatter，改完点「保存人格」一起写回。身份一句话说清「我是干什么的」，别写成简历。</p>
@@ -1145,7 +1145,7 @@ const SOUL_FIELDS = [
   ["soulIdentity", "identity"],
 ];
 
-/** 从 head 区取 `name: 摩羯` 这类字段。取不到给空串，不动原文。 */
+/** 从 head 区取 `name: …` 这类字段。取不到给空串，不动原文。 */
 function parseSoulFields(head) {
   const out = {};
   for (const [, key] of SOUL_FIELDS) {
