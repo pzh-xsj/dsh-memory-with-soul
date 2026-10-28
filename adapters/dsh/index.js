@@ -6,7 +6,7 @@
  *   3. 回合结束（session/event turn/end）→ 判断要不要提醒提炼
  *
  * 三个渲染/判定都只调 `core/memory.py`，本文件不实现业务逻辑：
- *   注入   → hooks/session-start.py --dry --cwd <cwd>
+ *   注入   → core/render.py --dry --cwd <cwd>
  *   戳记   → core/memory.py track --paths ...
  *   提醒   → core/memory.py digest --agent ... --turns N --session ... --json
  *
@@ -39,14 +39,14 @@ export const inject = ['subprocess']
 const DEFAULTS = {
   enabled: true,
   /** 依次尝试；含路径分隔符的当绝对路径检查存在性，其余交给 resolveExecutable。 */
-  python: ['python', 'py', 'E:\\python\\python.exe'],
-  /** 留空 = 自动找：先 PLUGIN_ROOT/hooks，再 sourceRoot/hooks。 */
+  python: ['python', 'python3', 'py'],
+  /** 留空 = 自动找 core/render.py。 */
   renderer: '',
-  /** 插件源码目录。装成真实副本时 PLUGIN_ROOT 会指向 node_modules，靠它兜底。 */
-  sourceRoot: 'C:\\Users\\<user>\\.workbuddy-ai\\plugins\\marketplaces\\local-moxie\\plugins\\memory',
-  /** 让渲染器把身份解析成 <defaultAgent>-dsh（默认 moxie-dsh）。 */
+  /** 额外的源码目录兜底；包根正常时留空即可。 */
+  sourceRoot: '',
+  /** MEMORY_HARNESS 的值：只进日志与注入头，0.6.6 起不再拼进 agent id。 */
   harness: 'dsh',
-  /** 覆盖 agent id；留空表示由 MEMORY_HARNESS + config.defaultAgent 推导。 */
+  /** 覆盖 agent id；留空表示按 config.defaultAgent 解析。 */
   agentName: '',
   timeoutMs: 10000,
   /** 子 agent 默认不注入：每个 subagent 多一份记忆就是实付 token。 */
@@ -56,6 +56,8 @@ const DEFAULTS = {
   /** 回合结束时判断要不要提醒提炼（对应 WB 的 Stop hook）。 */
   digest: true,
   digestSubagents: false,
+  /** 加载后把 skills/ 复制装进 ~/.dsh/skills/（复制模式，内容相同即跳过）。 */
+  installSkills: true,
   /** 把设置页挂到 DSH 自己的端口下（/api/memory/ui）。 */
   webUi: true,
   /** 渲染器工作目录，只影响相对路径解析，与 --cwd 无关。 */
@@ -69,15 +71,14 @@ const READ_TOOLS = new Set(['read', 'ops_read_files', 'Read', 'ops.read'])
 const MAX_CONCURRENT_CORE = 2
 
 /**
- * 渲染器的候选路径。DSH 用 pnpm 装本地目录时通常留软链，PLUGIN_ROOT 就是源码目录；
- * 但若被复制进 node_modules，PLUGIN_ROOT 会变成 `…/node_modules/@local`，
- * 所以再退一步用 sourceRoot。
+ * 渲染器的候选路径。包根就是 PLUGIN_ROOT（`adapters/dsh` 往上两级），
+ * 本地 link 与 npm 安装都一样；sourceRoot 只是用户能加的兜底。
  */
 function rendererCandidates(cfg) {
   const list = []
   if (cfg.renderer !== '') list.push(cfg.renderer)
-  list.push(join(PLUGIN_ROOT, 'hooks', 'session-start.py'))
-  if (cfg.sourceRoot !== '') list.push(join(cfg.sourceRoot, 'hooks', 'session-start.py'))
+  list.push(join(PLUGIN_ROOT, 'core', 'render.py'))
+  if (cfg.sourceRoot !== '') list.push(join(cfg.sourceRoot, 'core', 'render.py'))
   return [...new Set(list)]
 }
 
@@ -135,6 +136,7 @@ function normalize(ctx, raw) {
   bool('trackAccess')
   bool('digest')
   bool('digestSubagents')
+  bool('installSkills')
   bool('webUi')
   text('renderer')
   text('sourceRoot')
@@ -165,6 +167,8 @@ function warnOnce(ctx, key, message) {
 }
 
 let cachedPython
+/** skills 每进程只尝试装一次，失败也不重试（凭 warnOnce 留痕）。 */
+let skillsInstallStarted = false
 async function resolvePython(ctx, cfg) {
   if (cachedPython !== undefined) return cachedPython
   for (const candidate of cfg.python) {
@@ -192,7 +196,7 @@ async function resolvePython(ctx, cfg) {
 /**
  * 跑一次 core/memory.py。返回 `{ code, stdout, stderr }`；拿不到 python 或脚本时返回 null。
  *
- * 三个生命周期点共用它：注入走渲染器（session-start.py），其余两个走 CLI 子命令。
+ * 三个生命周期点共用它：注入走渲染器（core/render.py），其余两个走 CLI 子命令。
  */
 async function run(ctx, cfg, script, args, options = {}) {
   const python = await resolvePython(ctx, cfg)
@@ -414,6 +418,27 @@ export function apply(ctx, config) {
   }
   const injected = new WeakSet()
   const enqueue = createLimiter(MAX_CONCURRENT_CORE)
+
+  // skills 装进 ~/.dsh/skills/：npm 包装在 node_modules 里，符号链接会绑死版本路径，
+  // 所以用复制模式；cmd_skills 自己按内容判过期，重复跑是幂等的。
+  // 不 await：python 子进程慢的时候不该拖住插件加载。
+  if (cfg.installSkills && !skillsInstallStarted) {
+    skillsInstallStarted = true
+    void (async () => {
+      try {
+        const result = await runCore(ctx, cfg, ['skills', '--mode', 'copy', '--install'], { timeoutMs: 20000 })
+        if (result === null) return
+        if (result.code !== 0) {
+          warnOnce(ctx, 'skills', `skills 安装失败：${result.stderr.trim() || `退出码 ${String(result.code)}`}`)
+          return
+        }
+        const changed = result.stdout.includes('已装')
+        if (changed) ctx.logger.info('memory-inject: skills 已装进 ~/.dsh/skills/')
+      } catch (error) {
+        warnOnce(ctx, 'skills', `skills 安装失败：${String(error)}`)
+      }
+    })()
+  }
 
   ctx.on('agent/created', async (event) => {
     // serial 派发会 await 这个 Promise；抛出会让整个 agent 创建回滚，所以必须吞

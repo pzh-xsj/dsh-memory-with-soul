@@ -17,7 +17,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PLUGIN_ROOT = resolve(HERE, '..', '..')
-const RENDERER = join(PLUGIN_ROOT, 'hooks', 'session-start.py')
+const PACKAGE_JSON = join(PLUGIN_ROOT, 'package.json')
+const RENDERER = join(PLUGIN_ROOT, 'core', 'render.py')
 const API_CLIENT = join(PLUGIN_ROOT, 'ui', 'api.py')
 const verbose = process.argv.includes('--verbose')
 
@@ -42,17 +43,22 @@ function must(condition, message) {
 
 // ---------------------------------------------------------------- 1. 清单
 
-const manifest = JSON.parse(readFileSync(join(HERE, 'package.json'), 'utf8'))
+const manifest = JSON.parse(readFileSync(PACKAGE_JSON, 'utf8'))
 
-check('package.json: type=module + dsh.bundle.patch', () => {
+check('package.json: 可发布 + bundle patch 路径', () => {
   must(manifest.type === 'module', 'type 必须是 module')
-  must(manifest.dsh?.bundle?.patch === './cordis.patch.yml', 'dsh.bundle.patch 必须指向 ./cordis.patch.yml')
-  must(manifest.private === true, '本地 bundle 应 private:true')
-  return manifest.name
+  must(manifest.private !== true, '要发布的包不能 private:true')
+  must(typeof manifest.license === 'string' && manifest.license !== '', '缺 license')
+  must(manifest.dsh?.bundle?.patch === './adapters/dsh/cordis.patch.yml', 'dsh.bundle.patch 必须指向 ./adapters/dsh/cordis.patch.yml')
+  const files = manifest.files ?? []
+  for (const dir of ['adapters', 'core', 'ui', 'skills']) {
+    must(files.includes(dir), `files 必须包含 ${dir}（npm 包装不到就被漏掉）`)
+  }
+  return manifest.name + '@' + manifest.version
 })
 
 check('cordis.patch.yml: 插入行的 name 等于包名', () => {
-  const patchPath = join(HERE, manifest.dsh.bundle.patch)
+  const patchPath = join(PLUGIN_ROOT, manifest.dsh.bundle.patch)
   must(existsSync(patchPath), `patch 不存在：${patchPath}`)
   const yaml = readFileSync(patchPath, 'utf8')
   must(/^\s*-\s*insert:/m.test(yaml), 'patch 里没有 insert:')
@@ -62,9 +68,27 @@ check('cordis.patch.yml: 插入行的 name 等于包名', () => {
 })
 
 check('exports 覆盖 ./locale/*.json 与 ./icon', () => {
-  must(manifest.exports?.['./locale/*.json'] === './locale/*.json', '缺 ./locale/*.json 导出')
-  must(manifest.exports?.['./icon'] === './icon.svg', '缺 ./icon 导出')
+  must(manifest.exports?.['./locale/*.json'] === './adapters/dsh/locale/*.json', '缺 ./locale/*.json 导出')
+  must(manifest.exports?.['./icon'] === './adapters/dsh/icon.svg', '缺 ./icon 导出')
+  must(manifest.exports?.['.'] === './adapters/dsh/index.js', '主入口应指向 adapters/dsh/index.js')
   return 'ok'
+})
+
+check('包内必需文件都在（pack 之后也得能跑）', () => {
+  const required = [
+    'core/render.py',
+    'core/state.py',
+    'core/memory.py',
+    'ui/settings.html',
+    'ui/serve.py',
+    'ui/api.py',
+    'adapters/dsh/index.js',
+    'adapters/dsh/cordis.patch.yml',
+    ...['memory', 'memory-init', 'memory-save', 'memory-tidy'].map((n) => `skills/${n}/SKILL.md`),
+  ]
+  const missing = required.filter((rel) => !existsSync(join(PLUGIN_ROOT, rel)))
+  must(missing.length === 0, `缺文件：${missing.join(', ')}`)
+  return `${required.length} 个`
 })
 
 check('icon.svg 有效且 ≤256 KiB', () => {
@@ -118,7 +142,7 @@ check('注入消息通过宿主 v4 来源准入', () => {
 
 function findPython() {
   const override = process.env.MEMORY_PYTHON
-  const candidates = override ? [override] : ['python', 'py', 'E:\\python\\python.exe']
+  const candidates = override ? [override] : ['python', 'python3', 'py']
   for (const candidate of candidates) {
     const probe = spawnSync(candidate, ['-V'], { encoding: 'utf8' })
     if (probe.status === 0) return candidate
@@ -170,7 +194,6 @@ if (python === null) {
 // 靠肉眼检查不靠谱。
 
 const INDEX_JS = join(HERE, 'index.js')
-const PACKAGE_JSON = join(HERE, 'package.json')
 
 check('清单 / name 与 patch 一致', () => {
   const pkg = JSON.parse(readFileSync(PACKAGE_JSON, 'utf8'))
@@ -186,7 +209,7 @@ check('清单 / 必填字段', () => {
   for (const key of ['name', 'version', 'engines', 'dsh']) must(key in pkg, `缺少 ${key}`)
   must(pkg.engines.node !== undefined, '缺 engines.node')
   must(pkg.dsh?.engines?.dsh !== undefined, '缺 dsh.engines.dsh')
-  must(pkg.dsh?.bundle?.patch === './cordis.patch.yml', 'dsh.bundle.patch 应指向 cordis.patch.yml')
+  must(pkg.dsh?.bundle?.patch === './adapters/dsh/cordis.patch.yml', 'dsh.bundle.patch 应指向 adapters/dsh/cordis.patch.yml')
   return `${pkg.name}@${pkg.version}`
 })
 
@@ -198,6 +221,18 @@ check('入口 / 导出 apply、注入 subprocess', () => {
   must(/ctx\.on\(\s*'session\/event'/.test(src), '没挂 session/event（track 与 digest 都靠它）')
   must(src.includes("'track'"), '没调用 core 的 track 子命令')
   must(src.includes("'digest'"), '没调用 core 的 digest 子命令')
+  return 'ok'
+})
+
+check('skills / 加载时自动复制装（可关）', () => {
+  const src = readFileSync(INDEX_JS, 'utf8')
+  must(/installSkills:\s*true/.test(src), 'DEFAULTS 里没有 installSkills: true')
+  must(/bool\('installSkills'\)/.test(src), 'normalize 没接 installSkills')
+  must(/skillsInstallStarted/.test(src), '没有「每进程只装一次」的闸')
+  must(src.includes("'skills'") && src.includes("'--mode'"), '没调用 core 的 skills 子命令')
+  const bs = String.fromCharCode(92)
+  must(!src.includes('E:' + bs + 'python'), 'index.js 里还有写死的 python 路径')
+  must(!src.includes('C:' + bs + 'Users'), 'index.js 里还有写死的用户目录')
   return 'ok'
 })
 
@@ -231,7 +266,7 @@ check('内置设置页 / web.js 路由表合法', async () => {
     },
     logger: { warn: () => {}, info: () => {} },
   }
-  web.registerMemoryUi(ctx, { pagesDir: join(HERE, '..', '..', 'ui'), exec: async () => null, logger: ctx.logger })
+  web.registerMemoryUi(ctx, { pagesDir: join(PLUGIN_ROOT, 'ui'), exec: async () => null, logger: ctx.logger })
 
   must(registered.length === 11, `注册了 ${String(registered.length)} 条，期望 11`)
   for (const route of registered) {
@@ -255,18 +290,18 @@ check('内置设置页 / api.py 与 serve.py 共用实现', () => {
 check('左侧栏入口 / 浏览器半边已声明', () => {
   // 宿主按 exports['./client'] 找浏览器入口；少了这一条，左侧栏永远不会有
   // 「记忆库」，而服务端一半照常工作——最难查的那种半死。
-  const pkg = JSON.parse(readFileSync(join(HERE, 'package.json'), 'utf8'))
+  const pkg = JSON.parse(readFileSync(PACKAGE_JSON, 'utf8'))
   const entry = pkg.exports?.['./client']
   const file = typeof entry === 'string' ? entry : entry?.default
   must(typeof file === 'string', "package.json 缺 exports['./client']")
-  const bundle = readFileSync(join(HERE, file), 'utf8')
+  const bundle = readFileSync(join(PLUGIN_ROOT, file), 'utf8')
   must(/__ModuleLoader__\.load\(/.test(bundle), 'client 入口不是 __ModuleLoader__.load 形态')
   must(
     !/require\(['"](node:)?(fs|path|child_process|os)['"]\)/.test(bundle),
     'client 入口 require 了宿主没有的 node 内置模块',
   )
   must(pkg.dsh?.client?.platform === 'web', 'package.json 缺 dsh.client.platform')
-  must(pkg.files?.includes('client.js'), 'files 里没有 client.js，打包会漏')
+  must(pkg.files?.includes('adapters'), 'files 里没有 adapters，client.js 会漏')
   // 侧栏行与 main 面板靠同一个 id 连线：id 变了 key 没变，点进去就是空白。
   must(/name:\s*'main'/.test(bundle) && /key:\s*PANEL_ID/.test(bundle), '没注册 main 面板，或 key 没跟 id 共用')
   must(/name:\s*'sidebar\.panellist'/.test(bundle) && /id:\s*PANEL_ID/.test(bundle), '没注册 sidebar.panellist，或 id 没跟面板共用一个常量')

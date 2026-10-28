@@ -77,7 +77,7 @@ python <插件根>/core/memory.py init --project <工作区路径> \
 没过的话它会把命令打出来：
 
 ```bash
-python <插件根>/hooks/session-start.py --dry --cwd "<工作区路径>"
+python <插件根>/core/render.py --dry --cwd "<工作区路径>"
 ```
 
 对着输出确认三件事，缺一件就是没建对：

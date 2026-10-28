@@ -62,11 +62,11 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-# 提炼判据只在 hooks/_state.py 里实现一份，CLI 直接复用，不复制。
+# 提炼判据只在 core/state.py 里实现一份，CLI 直接复用，不复制。
 # 复制两份必然漂移——这个项目已经为「三份实现各自漂移」付过代价。
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from _state import (
+    from state import (
         default_role,
         extraction_state,
         find_project_book,
@@ -204,8 +204,8 @@ def find_root() -> Path:
 def default_agent(root: Path) -> str:
     """当前 agent 的 id（0.6.6 起就是人格名，不带 harness 后缀）。
 
-    优先走 hooks/_state 的解析，保证 CLI 和 hook 口径一致；
-    没有 _state 时退回读 config 的 defaultAgent。
+    优先走 core/state 的解析，保证 CLI 和 hook 口径一致；
+    没有 state 时退回读 config 的 defaultAgent。
     """
     if resolve_agent:
         try:
@@ -240,7 +240,7 @@ def list_agents(root: Path) -> list[str]:
 # 2026-10-27 起人格是「角色卡」：`roles/<role>/SOUL.md`。agent 只指向卡，不再
 # 自带一份人格——同一个 agent 换卡就换人，同一张卡被两个 agent 用就是同一个人。
 #
-# 解析逻辑在 hooks/_state.py（渲染器和 CLI 都要用，而 core 反过来依赖它），
+# 解析逻辑在 core/state.py（渲染器和 CLI 都要用，而 core 反过来依赖它），
 # 这里只放常量、配置读取和迁移命令，避免同一套规则写两遍各自漂移。
 
 ROLE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
@@ -252,7 +252,7 @@ SUBAGENT_ROLE_KEY = "subagent"
 
 
 def _config(root: Path) -> dict:
-    """读 config.json。_state 不在（单拷 core/）时退回本地读。"""
+    """读 config.json。state 不在（单拷 core/）时退回本地读。"""
     if load_config:
         return load_config(root) or {}
     p = root / "config.json"
@@ -1346,11 +1346,11 @@ _SESSION_START = None
 
 
 def _session_start_module():
-    """按文件路径加载 `hooks/session-start.py`——文件名带连字符，不能直接 import。"""
+    """按文件路径加载 `core/render.py`——避免 import 时执行它的 argparse 入口。"""
     global _SESSION_START
     if _SESSION_START is not None:
         return _SESSION_START
-    path = Path(__file__).resolve().parent.parent / "hooks" / "session-start.py"
+    path = Path(__file__).resolve().parent / "render.py"
     spec = importlib.util.spec_from_file_location("memory_session_start", path)
     if not spec or not spec.loader:
         raise RuntimeError(f"加载不了渲染器：{path}")
@@ -1370,7 +1370,7 @@ def render_injected(
 
     **不能 subprocess 跑 `--dry`**：那条路会 `write_state` 并 `touch_access`，
     等于每开一次设置页就伪造一次「刚读过」，把 `archive.staleDays` 的陈旧判定毁掉。
-    `load()` 本身是纯函数（`hooks/session-start.py:194`），所以直接调它。
+    `load()` 本身是纯函数（`core/render.py`），所以直接调它。
     """
     cfg = (load_config(root) if load_config else {}) or {}
     if not agent:
@@ -2328,7 +2328,7 @@ def apply_fixes(root: Path, kinds: list[str], dry: bool = False) -> dict:
 
 # ---------------------------------------------------------------- 配置：注入顺序
 #
-# 顺序的真相是 `priority`：hooks/session-start.py 按 (priority, path) 排序，
+# 顺序的真相是 `priority`：core/render.py 按 (priority, path) 排序，
 # 数组顺序只决定遍历。所以「在页面上调顺序」必须重写 priority，否则点保存
 # 什么都不会变。README 曾经把它写成「遍历按数组顺序」，是个会误导人的说法。
 
@@ -2652,7 +2652,7 @@ def cmd_digest(root: Path, argv: list[str]) -> int:
 
 # ---------------------------------------------------------------- 命令：track
 #
-# 访问戳记只有一份实现（hooks/_state.py 的 touch_access，按天幂等、按 agent 分文件）。
+# 访问戳记只有一份实现（core/state.py 的 touch_access，按天幂等、按 agent 分文件）。
 # DSH 那边把 `read`/`ops_read_files` 的路径丢进来，这边转成库内相对路径再戳。
 
 def cmd_track(root: Path, argv: list[str]) -> int:
@@ -3291,9 +3291,9 @@ def verify_injection(target: Path, title: str) -> tuple[bool, str]:
     用 `--dry`。注意它仍会写 `.state` 的访问戳记——所以只在建册时跑一次，
     不放进循环里重复调。
     """
-    script = Path(__file__).resolve().parent.parent / "hooks" / "session-start.py"
+    script = Path(__file__).resolve().parent / "render.py"
     if not script.is_file():
-        return False, "找不到 hooks/session-start.py"
+        return False, "找不到 core/render.py"
     env = {**os.environ, "MEMORY_HARNESS": "dsh", "PYTHONIOENCODING": "utf-8"}
     try:
         out = subprocess.run(
@@ -3430,7 +3430,7 @@ def cmd_init_project(
         print("自动验证：注入渲染通过，标题进得去")
     else:
         print(f"自动验证：没过 —— {detail}")
-        print("  手工验：python hooks/session-start.py --dry --cwd <这个目录>")
+        print("  手工验：python core/render.py --dry --cwd <这个目录>")
     return 0
 
 

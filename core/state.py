@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """记忆库运行时状态的公共函数。
 
-session-start.py（DSH 的渲染器）与 core/memory.py 共用，避免两份实现各自漂移。
+render.py（DSH 的渲染器）与 memory.py 共用，避免两份实现各自漂移。
 """
 
 from __future__ import annotations
@@ -175,7 +175,7 @@ def state_name(agent: str, name: str) -> str:
 # 为什么独立出来：agent id 带 harness 后缀（moxie-wb / moxie-dsh），人格原来
 # 长在 agents/<id>/ 里，于是同一个人在两台 harness 上是两份各自漂移的 SOUL.md。
 #
-# 放在 _state 而不是 core：渲染器（session-start）与 CLI 都要解析角色，
+# 放在 state.py 而不是 memory.py：渲染器（render）与 CLI 都要解析角色，
 # 而 core 反过来依赖本文件——放这里两边都能用，且只有一份实现。
 
 ROLE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")

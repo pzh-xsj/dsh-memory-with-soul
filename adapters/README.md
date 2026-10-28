@@ -1,12 +1,12 @@
 # adapters —— 一个中轴，每个 harness 一个薄壳
 
-记忆系统的**中轴**是 `hooks/session-start.py`（渲染器）+ `~/.memory/config.json`（注入表）。
+记忆系统的**中轴**是 `core/render.py`（渲染器）+ `~/.memory/config.json`（注入表）。
 本目录只放**把中轴接到某个 harness 上**的薄壳，每个 100–200 行，不重复渲染逻辑。
 
 ```
 ~/.memory/config.json          注入表（priority / maxChars / tailLines）
         │
-hooks/session-start.py         渲染器：读 config → 拼 <memory-context> → stdout
+core/render.py                渲染器：读 config → 拼 <memory-context> → stdout
         │
         │
    adapters/dsh/            SessionStart hook 的 stdout 直接进上下文
@@ -55,7 +55,7 @@ adapters/dsh/
 | --- | --- | --- |
 | `enabled` | `true` | 关掉注入，不动其他 |
 | `python` | `['python','py','E:\python\python.exe']` | 按顺序试；含路径分隔符的当绝对路径 |
-| `renderer` | 空 | 留空自动找：先「插件根/hooks/」，再「sourceRoot/hooks/」 |
+| `renderer` | 空 | 留空自动找 `core/render.py`；`sourceRoot` 只是兜底 |
 | `sourceRoot` | 本仓库的 `plugins/memory` | 插件被复制进 node_modules（而非软链）时用它兜底找渲染器 |
 | `harness` | `dsh` | 决定 agent id 后缀 |
 | `agentName` | 空 | 直接指定 agent id，留空则 `<config.defaultAgent>-<harness>` |
@@ -86,7 +86,7 @@ node smoke.mjs          # 9/9 通过 = 清单、模块、渲染器三关都过
 
 真装进 DSH 之后再看两处：
 
-1. `~/.memory/.state/session-start-moxie-dsh.json` 里 `harness: dsh`、`agent: moxie-dsh`
+1. `~/.memory/.state/session-start-moxie.json` 里 `harness: dsh`、`agent: moxie`
 2. 新会话里**没有** `~/.dsh/AGENTS.md` 那份手抄块——装上注入后它必须收缩成「人格 + 路由 + 故障提示」，
    否则同一个人格吃两遍 token（这就是 Step 0b，等安装成功再做）
 
@@ -101,8 +101,8 @@ node smoke.mjs          # 9/9 通过 = 清单、模块、渲染器三关都过
 
 ## 加一个新 harness
 
-1. 在 `adapters/<name>/` 建壳，只调用 `hooks/session-start.py`，**不复制渲染逻辑**；
-2. 身份：先设 `<NAME>_HARNESS` 等价物，让 `_state.py` 推出 `<defaultAgent>-<name>`；
+1. 在 `adapters/<name>/` 建壳，只调用 `core/render.py`，**不复制渲染逻辑**；
+2. 身份：先设 `<NAME>_HARNESS` 等价物（只影响日志与注入头；agent id 由 `config.defaultAgent` 决定）；
 3. 注入点必须是「模型能看见、且能重建」的位置——抄进 system prompt 不算；
 4. 写一个不需要装进该 harness 的 smoke，覆盖「有项目册 / 无项目册 / 路径不存在」三种 cwd；
 5. 在 README 的「各 harness 怎么接」表里加一行。

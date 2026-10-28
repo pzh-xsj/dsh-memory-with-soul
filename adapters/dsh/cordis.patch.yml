@@ -1,18 +1,19 @@
-# memory-inject 的 bundle patch：装到 profile 后由 Loader 合并这一行挂载插件。
+# dsh-memory-with-soul 的 bundle patch：装到 profile 后由 Loader 合并这一行挂载插件。
 # 行说明符必须等于 package.json 的 name（插件清单按最近 manifest 的名字匹配）。
 #
 # 可调项（用户的 cordis.patch.yml 里同 id 的行会整体覆盖 config，不是深合并）：
 #   enabled          false 关掉注入
 #   python           候选列表，按顺序试；含路径分隔符的当绝对路径
-#   renderer         渲染器脚本路径；留空 = 自动找（先插件根 hooks/，再 sourceRoot/hooks/）
-#   sourceRoot       插件源码目录，装成真实副本时用它兜底找渲染器
-#   harness          环境变量 MEMORY_HARNESS 的值，决定 agent id 的后缀
-#   agentName        直接指定 agent id，留空则用 <config.defaultAgent>-<harness>
+#   renderer         渲染器脚本路径；留空 = 自动找 core/render.py
+#   sourceRoot       额外的源码目录兜底（留空即可；包根不对时才有用）
+#   harness          环境变量 MEMORY_HARNESS 的值，只影响日志与注入头（0.6.6 起不进 agent id）
+#   agentName        直接指定 agent id，留空则用 config.defaultAgent
 #   timeoutMs        渲染器超时（毫秒），超时先 terminate 再强杀
 #   injectSubagents  true 时连子 agent 也注入（默认 false，省 token）
+#   installSkills    true 时插件加载后自动把 skills/ 复制进 ~/.dsh/skills/（默认 true）
 #   cwd              渲染器的工作目录，只影响相对路径解析
 - insert:
     - id: memory-inject
-      name: '@local/dsh-memory-inject'
+      name: 'dsh-memory-with-soul'
       config:
         harness: dsh

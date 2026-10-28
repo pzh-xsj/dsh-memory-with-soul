@@ -69,6 +69,8 @@ function fakeContext({ stdout = '', exitCode = 0 } = {}) {
       },
     },
     subprocess: {
+      /** 真宿主用来在 PATH 里找可执行文件；自检里原样返回候选名。 */
+      resolveExecutable: async (name) => name,
       spawn: (spec) => {
         calls.push(spec)
         return {
@@ -107,7 +109,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 60))
 
 await check('agent/created → 注入一条 <memory-context>', async () => {
   const host = fakeContext({ stdout: '<memory-context>\n# 长期记忆\n</memory-context>\n' })
-  apply(host.ctx, {})
+  apply(host.ctx, { installSkills: false })
   const { agent, injected } = fakeAgent()
   await host.fire('agent/created', { agent })
   must(injected.length === 1, `注入 ${injected.length} 次`)
@@ -123,7 +125,7 @@ await check('agent/created → 注入一条 <memory-context>', async () => {
 
 await check('设置页 → 往宿主注册路由', async () => {
   const host = fakeContext()
-  apply(host.ctx, {})
+  apply(host.ctx, { installSkills: false })
   must(host.routes.length >= 9, `注册了 ${host.routes.length} 条`)
   const paths = host.routes.map((route) => route.path)
   for (const need of ['/api/memory/ui', '/api/memory/style.css', '/api/memory/overview']) {
@@ -134,7 +136,7 @@ await check('设置页 → 往宿主注册路由', async () => {
 
 await check('tool/call(read) → track 带 --paths', async () => {
   const host = fakeContext()
-  apply(host.ctx, {})
+  apply(host.ctx, { installSkills: false })
   const { agent, session } = fakeAgent()
   await host.fire('agent/created', { agent })
   host.calls.length = 0
@@ -157,7 +159,7 @@ await check('tool/call(read) → track 带 --paths', async () => {
 
 await check('tool/call(非读工具) → 不 spawn', async () => {
   const host = fakeContext()
-  apply(host.ctx, {})
+  apply(host.ctx, { installSkills: false })
   const { agent, session } = fakeAgent()
   await host.fire('agent/created', { agent })
   host.calls.length = 0
@@ -174,7 +176,7 @@ await check('tool/call(非读工具) → 不 spawn', async () => {
 
 await check('重放事件（surfaceOp 不是 append）→ 不 spawn', async () => {
   const host = fakeContext()
-  apply(host.ctx, {})
+  apply(host.ctx, { installSkills: false })
   const { agent, session } = fakeAgent()
   await host.fire('agent/created', { agent })
   host.calls.length = 0
@@ -191,7 +193,7 @@ await check('重放事件（surfaceOp 不是 append）→ 不 spawn', async () =
 
 await check('turn/end 且 core 返回 should=true → 注入提醒', async () => {
   const host = fakeContext({ stdout: '{"should":true,"text":"写点东西","kind":"stale","code":""}', exitCode: 2 })
-  apply(host.ctx, {})
+  apply(host.ctx, { installSkills: false })
   const { agent, session, injected } = fakeAgent()
   await host.fire('agent/created', { agent })
   injected.length = 0
@@ -216,7 +218,7 @@ await check('turn/end 且 core 返回 should=true → 注入提醒', async () =>
 
 await check('turn/end 且 core 返回 should=false → 不注入', async () => {
   const host = fakeContext({ stdout: '{"should":false,"text":""}', exitCode: 0 })
-  apply(host.ctx, {})
+  apply(host.ctx, { installSkills: false })
   const { agent, session, injected } = fakeAgent()
   await host.fire('agent/created', { agent })
   injected.length = 0
@@ -233,7 +235,7 @@ await check('turn/end 且 core 返回 should=false → 不注入', async () => {
 
 await check('子 agent 默认不注入记忆', async () => {
   const host = fakeContext({ stdout: '<memory-context>x</memory-context>' })
-  apply(host.ctx, {})
+  apply(host.ctx, { installSkills: false })
   const { agent, injected } = fakeAgent({ origin: 'subagent' })
   await host.fire('agent/created', { agent })
   must(injected.length === 0, '子 agent 被注入了')
@@ -258,6 +260,25 @@ await check('消息工厂的 source.kind 不是退役的 plugin', () => {
     must(Array.isArray(message.content) && message.content[0].type === 'text', `${label} 正文不是 text`)
   }
   return 'ok'
+})
+
+// ---------------------------------------------------------------- skills 自动装
+
+await check('加载时自动复制装 skills，且每进程只装一次', async () => {
+  const first = fakeContext({ stdout: '已装：memory' })
+  apply(first.ctx, {})
+  await settle()
+  const installs = first.calls.filter((call) => call.argv.includes('skills'))
+  must(installs.length === 1, `skills spawn ${String(installs.length)} 次`)
+  const argv = installs[0].argv.join(' ')
+  must(argv.includes('skills --mode copy --install'), `argv 不对：${argv}`)
+
+  // 第二次加载（比如宿主热重载）不该再跑一遍
+  const second = fakeContext({})
+  apply(second.ctx, {})
+  await settle()
+  must(second.calls.filter((call) => call.argv.includes('skills')).length === 0, '第二次加载又装了一遍')
+  return 'once'
 })
 
 // ---------------------------------------------------------------- 报表

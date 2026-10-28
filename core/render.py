@@ -15,12 +15,12 @@ harness 靠 MEMORY_HARNESS → transcript_path → 插件路径判定，只进�
 payload 里没有 agent 字段，同一 harness 换专家认不出来，只能靠 MEMORY_AGENT 手工覆盖。
 
 用法：
-    python session-start.py            # 从 stdin 读 hook 输入（正常用法）
-    python session-start.py --dry      # 不读 stdin，直接打印（手动测试）
-    python session-start.py --dry --cwd "D:\\某项目"   # 指定 cwd 测试项目册定位
+    python core/render.py              # 从 stdin 读 hook 输入（正常用法）
+    python core/render.py --dry        # 不读 stdin，直接打印（手动测试）
+    python core/render.py --dry --cwd "D:\\某项目"   # 指定 cwd 测试项目册定位
 
-    python session-start.py --dry --agent moxie-dsh --role advisor   # 指定身份与角色卡
-    python session-start.py --dry --subagent            # 按子 agent 的卡渲染（roles.subagent）
+    python core/render.py --dry --agent moxie --role advisor   # 指定身份与角色卡
+    python core/render.py --dry --subagent            # 按子 agent 的卡渲染（roles.subagent）
 环境变量：
     MEMORY_DIR      记忆库路径，默认 ~/.memory
     MEMORY_AGENT    完整覆盖 agent id（逃生口，必须符合 [a-z0-9-]）
@@ -39,7 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _state import (
+from state import (
     AGENT_RE,
     detect_harness,
     find_project_book,

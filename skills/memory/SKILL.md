@@ -34,7 +34,7 @@ CLI 在 `<插件根>/core/memory.py`，十一个入口：
 
 注入内容第一行 `# 长期记忆（agent: xxx，harness: yyy，库：...）` 就是当前身份，**不要猜**。
 
-判定规则（代码在 `hooks/_state.py`）：
+判定规则（代码在 `core/state.py`）：
 
 1. `MEMORY_AGENT` 环境变量 → 整体覆盖
 2. `payload.agent_type` → 专家 / 具名会话自带（普通会话没有这个字段）

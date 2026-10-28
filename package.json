@@ -1,0 +1,55 @@
+{
+  "name": "dsh-memory-with-soul",
+  "version": "0.7.0",
+  "description": "Long-term memory library for DeepSeek Harness: injects <memory-context> at session start, records which memory files were read, and reminds you to extract conclusions. Markdown + git, role cards, settings UI. Requires Python 3.10+.",
+  "type": "module",
+  "main": "./adapters/dsh/index.js",
+  "exports": {
+    ".": "./adapters/dsh/index.js",
+    "./client": "./adapters/dsh/client.js",
+    "./locale/*.json": "./adapters/dsh/locale/*.json",
+    "./icon": "./adapters/dsh/icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "adapters",
+    "core",
+    "ui",
+    "skills",
+    "README.md"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "memory",
+    "long-term-memory",
+    "markdown",
+    "personal-assistant"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR-GITHUB-USER/dsh-memory-with-soul.git"
+  },
+  "homepage": "https://github.com/YOUR-GITHUB-USER/dsh-memory-with-soul#readme",
+  "bugs": {
+    "url": "https://github.com/YOUR-GITHUB-USER/dsh-memory-with-soul/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.1.0-rc.1 <0.3.0-0"
+    },
+    "bundle": {
+      "patch": "./adapters/dsh/cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  }
+}
